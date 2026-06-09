@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const { resolveProject } = require('./lib/resolve-project');
 const { buildSourceEditPrompt } = require('./lib/build-prompt');
 const { parseReport } = require('./lib/parse-report');
+const { parseBackup } = require('./lib/parse-backup');
 
 const PROMPT_PREFIX =
   'You are an HTML editor. The user provides an HTML snippet and an instruction. ' +
@@ -30,8 +31,9 @@ function loadConfig() {
 }
 
 function createApp(deps) {
-  var spawn  = (deps && deps.spawnSync) || spawnSync;
-  var config = (deps && deps.config)    || loadConfig();
+  var spawn       = (deps && deps.spawnSync) || spawnSync;
+  var config      = (deps && deps.config)    || loadConfig();
+  var backupStore = {};  // { [id]: { file, content } }
 
   var app = express();
   app.use(cors());
@@ -130,36 +132,35 @@ function createApp(deps) {
       }
 
       var report = parseReport(proc.stdout);
-      res.json(report);
+      var backupId = null;
+      if (report.status === 'edited' && report.file) {
+        var backupContent = parseBackup(proc.stdout);
+        if (backupContent !== null) {
+          backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+          backupStore[backupId] = { file: report.file, content: backupContent };
+          var keys = Object.keys(backupStore);
+          if (keys.length > 100) { delete backupStore[keys[0]]; }
+        }
+      }
+      res.json(Object.assign({}, report, { backupId: backupId }));
     } catch (err) {
       res.status(500).json({ error: err.message || 'claude CLI error' });
     }
   });
 
-  // ── POST /revert-file  (revierte un archivo editado vía git) ────────────────
-  app.post('/revert-file', function (req, res) {
+  // ── POST /restore-backup  (restaura el archivo al estado previo a la edición) ─
+  app.post('/restore-backup', function (req, res) {
     var b = req.body || {};
-    if (!b.file) return res.status(400).json({ error: 'file is required' });
-
-    var file = b.file;
-    if (!path.isAbsolute(file) || path.resolve(file) !== file) {
-      return res.status(400).json({ error: 'invalid file path' });
+    if (!b.backupId) return res.status(400).json({ error: 'backupId required' });
+    var entry = backupStore[b.backupId];
+    if (!entry) return res.status(404).json({ error: 'backup no encontrado (el servidor puede haberse reiniciado)' });
+    try {
+      fs.writeFileSync(entry.file, entry.content, 'utf-8');
+      delete backupStore[b.backupId];
+      res.json({ ok: true, file: entry.file });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
-    if (!fs.existsSync(file)) {
-      return res.status(404).json({ error: 'file not found' });
-    }
-
-    var proc = spawn('git', ['checkout', 'HEAD', '--', file], {
-      cwd: path.dirname(file),
-      encoding: 'utf-8',
-      timeout: 10000
-    });
-
-    if (proc.error || proc.status !== 0) {
-      var msg = (proc.stderr || '').trim() || 'git checkout failed';
-      return res.status(500).json({ error: msg });
-    }
-    res.json({ ok: true });
   });
 
   // ── GET /inject.js  (sirve el script para inyección manual o Tampermonkey) ─

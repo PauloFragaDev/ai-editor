@@ -220,9 +220,9 @@
                   '<span style="color:#9ca3af;white-space:nowrap">' + e.time + '</span>' +
                   '<span style="color:#6b7280;white-space:nowrap">&lt;' + e.tag + '&gt;</span>' +
                   '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(e.instruction) + '">' + escapeHtml(e.instruction) + '</span>' +
-                  (e.file ? '<button data-revert="' + i + '" style="flex-shrink:0;font-size:10px;padding:1px 5px;' +
+                  (e.backupId ? '<button data-revert="' + i + '" style="flex-shrink:0;font-size:10px;padding:1px 5px;' +
                     'border:1px solid #fca5a5;border-radius:3px;background:#fff;cursor:pointer;' +
-                    'color:#dc2626;white-space:nowrap" title="Revertir en git: ' + escapeHtml(e.file) + '">↩ git</button>' : '') +
+                    'color:#dc2626;white-space:nowrap" title="Deshacer cambio en: ' + escapeHtml(e.file || '') + '">&#8617; deshacer</button>' : '') +
                   '</div>';
               }).join('')
           ) +
@@ -239,7 +239,11 @@
     panel.querySelectorAll('[data-revert]').forEach(function (btn) {
       var idx = parseInt(btn.getAttribute('data-revert'), 10);
       var entry = sessionHistory[idx];
-      if (entry && entry.file) { btn.addEventListener('click', function () { revertFile(entry.file); }); }
+      if (entry && entry.backupId) {
+        btn.addEventListener('click', function () {
+          restoreBackup(entry.backupId, (entry.file || '').split('/').slice(-1)[0] || 'archivo');
+        });
+      }
     });
     panel.querySelector('#__aie_hist_clear').addEventListener('click', function () {
       sessionHistory = []; renderHistory(panel);
@@ -270,22 +274,22 @@
     return panel;
   }
 
-  function addHistoryEntry(el, instruction, file) {
+  function addHistoryEntry(el, instruction, file, backupId) {
     var now  = new Date();
     var time = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50), file: file || null });
+    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50), file: file || null, backupId: backupId || null });
     if (historyEl) { renderHistory(historyEl); }
   }
 
-  function revertFile(file) {
-    if (!confirm('Revertir "' + file.split('/').slice(-1)[0] + '" a la \xFAltima versi\xF3n en git?\nEsto deshace el cambio en el archivo fuente.')) return;
-    fetch('http://localhost:3333/revert-file', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: file })
+  function restoreBackup(backupId, filename) {
+    if (!confirm('Deshacer el cambio en "' + filename + '"?\nSe restaurar\xE1 el contenido anterior del archivo.')) return;
+    fetch('http://localhost:3333/restore-backup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ backupId: backupId })
     })
     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
     .then(function (res) {
       if (res.ok && res.body.ok) { reloadPage(); }
-      else { alert('No se pudo revertir.\n' + (res.body.error || '') + '\nUsa manualmente: git checkout HEAD -- ' + file); }
+      else { alert('No se pudo restaurar.\n' + (res.body.error || 'Error desconocido')); }
     })
     .catch(function (err) { alert('Error: ' + err.message); });
   }
@@ -451,7 +455,7 @@
           .then(function (res) {
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
-              addHistoryEntry(selectedEl, evidence.instruction, res.body.file);
+              addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId);
               reloadPage();
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
@@ -474,7 +478,7 @@
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
         var rep = res.body;
         if (rep.status === 'edited') {
-          addHistoryEntry(selectedEl, instruction, rep.file);
+          addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId);
           if (rep.affectsMultiple) {
             showMsg('Plantilla reutilizada (' + rep.file + '). Afectar\xE1 a todas las instancias. Recargando…', '#92400e');
             setTimeout(reloadPage, 2000);

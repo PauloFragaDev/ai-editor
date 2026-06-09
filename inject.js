@@ -22,10 +22,11 @@
   var historyCollapsed = false;
   var selectionMode    = 'element'; // 'element' | 'area'
   var sessionHistory   = [];
-  var areaDragging     = false;
-  var areaStartX       = 0;
-  var areaStartY       = 0;
-  var areaOverlay      = null;
+  var areaDragging          = false;
+  var areaStartX            = 0;
+  var areaStartY            = 0;
+  var areaOverlay           = null;  // overlay temporal mientras se arrastra
+  var selectionIndicatorEl  = null;  // indicador fijo tras soltar el ratón
 
   var SERVER_URL = 'http://localhost:3333/edit';
   var SOURCE_URL = 'http://localhost:3333/edit-source';
@@ -483,8 +484,8 @@
   }
 
   function closePanel() {
-    if (panelEl)     { panelEl.remove();     panelEl     = null; }
-    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
+    if (panelEl)              { panelEl.remove();              panelEl              = null; }
+    if (selectionIndicatorEl) { selectionIndicatorEl.remove(); selectionIndicatorEl = null; }
     selectedEl = null;
   }
 
@@ -514,8 +515,9 @@
     if (badgeEl)   { badgeEl.remove();   badgeEl   = null; }
     if (toolbarEl) { toolbarEl.remove(); toolbarEl = null; }
     if (historyEl) { historyEl.remove(); historyEl = null; }
-    if (hoveredEl) { hoveredEl.style.outline = ''; hoveredEl = null; }
-    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
+    if (hoveredEl)            { hoveredEl.style.outline = '';         hoveredEl            = null; }
+    if (areaOverlay)          { areaOverlay.remove();                 areaOverlay          = null; }
+    if (selectionIndicatorEl) { selectionIndicatorEl.remove();        selectionIndicatorEl = null; }
     backupHTML = null;
     closePanel();
   }
@@ -575,21 +577,21 @@
     areaDragging = false;
     var x1 = Math.min(e.clientX, areaStartX), y1 = Math.min(e.clientY, areaStartY);
     var x2 = Math.max(e.clientX, areaStartX), y2 = Math.max(e.clientY, areaStartY);
-    if (x2 - x1 < 5 || y2 - y1 < 5) {
-      if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
-      return;
-    }
-    // Convertir el overlay a indicador de selección fija (borde sólido)
-    if (areaOverlay) {
-      areaOverlay.style.border = '2px solid #3b82f6';
-      areaOverlay.style.background = 'rgba(59,130,246,0.12)';
-      areaOverlay.style.boxShadow = '0 0 0 1px rgba(59,130,246,0.4)';
-    }
+    // Eliminar siempre el overlay de arrastre
+    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
+    if (x2 - x1 < 5 || y2 - y1 < 5) return;
     var target = findContainingElement(x1, y1, x2, y2);
     if (target) {
+      // Crear indicador de selección persistente (se elimina al cerrar el panel)
+      if (selectionIndicatorEl) { selectionIndicatorEl.remove(); }
+      selectionIndicatorEl = document.createElement('div');
+      selectionIndicatorEl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;' +
+        'box-sizing:border-box;border:2px solid #3b82f6;background:rgba(59,130,246,0.12);' +
+        'box-shadow:0 0 0 3px rgba(59,130,246,0.25);border-radius:3px;' +
+        'left:' + x1 + 'px;top:' + y1 + 'px;' +
+        'width:' + (x2 - x1) + 'px;height:' + (y2 - y1) + 'px';
+      document.body.appendChild(selectionIndicatorEl);
       openPanel(target);
-    } else {
-      if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
     }
   });
 

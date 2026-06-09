@@ -283,10 +283,10 @@
     return panel;
   }
 
-  function addHistoryEntry(el, instruction, file, backupId) {
+  function addHistoryEntry(el, instruction, file, backupId, hasBackup) {
     var now  = new Date();
     var time = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50), file: file || null, backupId: backupId || null });
+    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50), file: file || null, backupId: backupId || null, hasBackup: !!hasBackup });
     if (historyEl) { renderHistory(historyEl); }
   }
 
@@ -411,6 +411,15 @@
     function hideMsg() { msgEl.style.display = 'none'; }
     function resetApplyBtn() { applyBtn.disabled = false; applyBtn.textContent = 'Aplicar'; inputEl.readOnly = false; }
 
+    function repositionIndicator() {
+      if (!selectionIndicatorEl || !selectedEl) { return; }
+      var r = selectedEl.getBoundingClientRect();
+      selectionIndicatorEl.style.left   = r.left + 'px';
+      selectionIndicatorEl.style.top    = r.top + 'px';
+      selectionIndicatorEl.style.width  = r.width + 'px';
+      selectionIndicatorEl.style.height = r.height + 'px';
+    }
+
     function applyHtmlToDom(newHtml) {
       var tmp = document.createElement('div');
       tmp.innerHTML = newHtml;
@@ -464,8 +473,15 @@
           .then(function (res) {
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
-              addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId);
-              reloadPage();
+              addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId, res.body.hasBackup);
+              if (res.body.newHtml && !res.body.affectsMultiple) {
+                applyHtmlToDom(res.body.newHtml);
+                repositionIndicator();
+                showMsg('Editado ✓ (archivo guardado)', '#059669');
+                setTimeout(hideMsg, 2500);
+              } else {
+                reloadPage();
+              }
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
           .catch(function (err) { showMsg(err.message || 'Error.', '#ef4444'); resetApplyBtn(); });
@@ -487,8 +503,13 @@
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
         var rep = res.body;
         if (rep.status === 'edited') {
-          addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId);
-          if (rep.affectsMultiple) {
+          addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId, rep.hasBackup);
+          if (rep.newHtml && !rep.affectsMultiple) {
+            applyHtmlToDom(rep.newHtml);
+            repositionIndicator();
+            showMsg('Editado ✓ (archivo guardado)', '#059669');
+            setTimeout(hideMsg, 2500);
+          } else if (rep.affectsMultiple) {
             showMsg('Plantilla reutilizada (' + rep.file + '). Afectar\xE1 a todas las instancias. Recargando…', '#92400e');
             setTimeout(reloadPage, 2000);
           } else {

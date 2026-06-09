@@ -30,6 +30,72 @@
       .replace(/"/g, '&quot;');
   }
 
+  // ── Evidence collection ──────────────────────────────────────────────────
+  function collectFrameworkHint(el) {
+    var out = { framework: 'none', sourceHint: null, componentFile: null, viteInspector: null };
+    try {
+      var insp = el.closest && el.closest('[data-v-inspector]');
+      if (insp) { out.framework = 'vue'; out.viteInspector = insp.getAttribute('data-v-inspector'); }
+
+      var node = el;
+      while (node && !out.componentFile) {
+        var vc = node.__vueParentComponent;
+        if (vc && vc.type && vc.type.__file) { out.framework = 'vue'; out.componentFile = vc.type.__file; break; }
+        node = node.parentElement;
+      }
+
+      var key = Object.keys(el).find(function (k) { return k.indexOf('__reactFiber$') === 0; });
+      if (key) {
+        if (out.framework === 'none') { out.framework = 'react'; }
+        var fiber = el[key];
+        while (fiber) {
+          if (fiber._debugSource) {
+            var s = fiber._debugSource;
+            out.sourceHint = { fileName: s.fileName, lineNumber: s.lineNumber, columnNumber: s.columnNumber };
+            break;
+          }
+          fiber = fiber.return;
+        }
+      }
+    } catch (e) { /* nunca romper el editor por un hint */ }
+    return out;
+  }
+
+  function buildAncestors(el) {
+    var chain = [], node = el.parentElement, depth = 0;
+    while (node && node !== document.body && depth < 5) {
+      var sel = node.tagName.toLowerCase();
+      if (node.id) { sel += '#' + node.id; }
+      else if (node.className && typeof node.className === 'string') {
+        sel += '.' + node.className.trim().split(/\s+/).slice(0, 2).join('.');
+      }
+      chain.unshift(sel);
+      node = node.parentElement; depth++;
+    }
+    return chain;
+  }
+
+  function pickUniqueText(el) {
+    var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!txt) { return null; }
+    return txt.length > 80 ? txt.slice(0, 80) : txt;
+  }
+
+  function buildEvidence(el, instruction) {
+    var hint = collectFrameworkHint(el);
+    var attrs = {};
+    if (el.id) { attrs.id = el.id; }
+    if (el.className && typeof el.className === 'string') { attrs['class'] = el.className; }
+    return {
+      url: { origin: location.origin, pathname: location.pathname, href: location.href },
+      framework: hint.framework, sourceHint: hint.sourceHint,
+      viteInspector: hint.viteInspector, componentFile: hint.componentFile,
+      outerHTML: (el.outerHTML || '').slice(0, 4096),
+      ancestors: buildAncestors(el), uniqueText: pickUniqueText(el),
+      attrs: attrs, instruction: instruction
+    };
+  }
+
   // ── Badge ────────────────────────────────────────────────────────────────
   function createBadge() {
     var el = document.createElement('div');

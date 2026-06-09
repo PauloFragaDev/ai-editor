@@ -1,6 +1,9 @@
 (function () {
   'use strict';
 
+  if (window.__aieLoaded) { console.log('[AI Editor] Ya está inyectado.'); return; }
+  window.__aieLoaded = true;
+
   // ── State ────────────────────────────────────────────────────────────────
   var editMode  = false;
   var selectedEl = null;
@@ -96,6 +99,7 @@
   // ── Open / Close panel ───────────────────────────────────────────────────
   function openPanel(el) {
     closePanel();
+    backupHTML = null;
     selectedEl = el;
     panelEl = createPanel(el.outerHTML);
     document.body.appendChild(panelEl);
@@ -139,8 +143,10 @@
 
         // Replace element in DOM
         var tmp = document.createElement('div');
+        // trusted: response comes from our local server only
         tmp.innerHTML = data.html;
         var newEl = tmp.firstElementChild || tmp.firstChild;
+        if (hoveredEl === selectedEl) { hoveredEl = null; }
         selectedEl.replaceWith(newEl);
         selectedEl = newEl;
 
@@ -178,7 +184,6 @@
   function closePanel() {
     if (panelEl) { panelEl.remove(); panelEl = null; }
     selectedEl = null;
-    backupHTML = null;
   }
 
   // ── Edit mode on/off ─────────────────────────────────────────────────────
@@ -192,11 +197,13 @@
     editMode = false;
     if (badgeEl)   { badgeEl.remove();  badgeEl = null; }
     if (hoveredEl) { hoveredEl.style.outline = ''; hoveredEl = null; }
+    backupHTML = null;
     closePanel();
   }
 
   // ── Global event listeners ───────────────────────────────────────────────
   document.addEventListener('keydown', function (e) {
+    if (e.repeat) return;
     if (e.altKey && (e.key === 'e' || e.key === 'E')) {
       e.preventDefault();
       editMode ? exitEditMode() : enterEditMode();

@@ -1,5 +1,21 @@
 1. Instalar: cd ai-editor && npm install
 2. Iniciar servidor: npm start  (requiere Claude Code autenticado con tu cuenta)
-3. En cualquier página local, pegar el contenido de inject.js en la consola del navegador (o añadir <script src="/.../inject.js"></script>)
+3. Auto-inyección: instala Tampermonkey, abre http://localhost:3333/userscript.user.js e instala el userscript
+   (alternativa: pegar inject.js en la consola del navegador, o añadir <script src="http://localhost:3333/inject.js"></script>)
 4. Alt+E activa el modo edición; hover resalta elementos, click abre el panel; Escape para salir
 5. El servidor llama al CLI de Claude Code — no se necesita API key separada
+
+Edición de archivos fuente
+--------------------------
+Por defecto, al aplicar un cambio el servidor localiza el archivo fuente real y lo edita
+(HTML estático, plantillas Blade, componentes Vue/React). Tras guardar, la página recarga.
+
+Para proyectos servidos en puertos distintos a :80 (p.ej. Laravel en :8000, Vite en :5173),
+edita ai-editor/projects.config.json y añade una entrada en "routes":
+
+  { "match": "http://localhost:8000", "projectRoot": "/var/www/html/mi-proyecto", "kind": "laravel" }
+
+Tipos soportados: "laravel" (edita en resources/), "spa-vue" / "spa" (edita en src/), "static" (edita *.html).
+
+Si el archivo fuente no puede localizarse (build de producción, elemento sin texto único),
+el panel ofrece editar solo en pantalla de forma temporal.

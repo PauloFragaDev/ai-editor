@@ -11,8 +11,22 @@ const { parseReport } = require('./lib/parse-report');
 const { parseBackup } = require('./lib/parse-backup');
 const backupStore    = require('./lib/backup-store');
 
-function projectKeyFromRoot(projectRoot) {
-  return path.basename(projectRoot || 'unknown');
+function projectKeyFromUrl(url, config) {
+  // file:// → nombre del directorio que contiene el archivo
+  if (!url.origin || url.origin === 'null') {
+    return path.basename(path.dirname(url.pathname || '')) || 'local';
+  }
+  // Ruta explícita configurada → nombre del projectRoot configurado
+  var routes = (config && config.routes) || [];
+  for (var i = 0; i < routes.length; i++) {
+    var m = routes[i].match;
+    if (url.origin === m || (url.origin + (url.pathname || '')).indexOf(m) === 0) {
+      return path.basename(routes[i].projectRoot);
+    }
+  }
+  // Apache :80 → primer segmento del pathname
+  var segs = (url.pathname || '/').split('/').filter(Boolean);
+  return segs[0] || 'html';
 }
 
 const PROMPT_PREFIX =
@@ -141,7 +155,7 @@ function createApp(deps) {
       if (report.status === 'edited' && report.file) {
         backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
         store.add(backupId, report.file, parseBackup(proc.stdout), {
-          projectKey:  projectKeyFromRoot(resolved.projectRoot),
+          projectKey:  projectKeyFromUrl(b.url, config),
           instruction: (b.instruction || '').slice(0, 100),
           tag:         b.tag || '?',
           time:        new Date().toTimeString().slice(0, 5)
@@ -156,17 +170,13 @@ function createApp(deps) {
   // ── GET /history  (historial de ediciones de un proyecto) ───────────────────
   app.get('/history', function (req, res) {
     var url = { origin: req.query.origin || '', pathname: req.query.pathname || '/' };
-    var resolved = resolveProject(url, config);
-    var projectKey = projectKeyFromRoot(resolved.projectRoot);
-    res.json(store.forProject(projectKey));
+    res.json(store.forProject(projectKeyFromUrl(url, config)));
   });
 
   // ── DELETE /history  (limpiar historial y backups de un proyecto) ────────────
   app.delete('/history', function (req, res) {
     var url = { origin: req.query.origin || '', pathname: req.query.pathname || '/' };
-    var resolved = resolveProject(url, config);
-    var projectKey = projectKeyFromRoot(resolved.projectRoot);
-    store.clearProject(projectKey);
+    store.clearProject(projectKeyFromUrl(url, config));
     res.json({ ok: true });
   });
 

@@ -167,9 +167,9 @@ function createApp(deps) {
 
       var report = parseReport(proc.stdout);
       var backupId = null;
+      var backupContent = null;
       if (report.status === 'edited' && report.file) {
         // Backup: pre-leído si el archivo era conocido, si no intenta parsear del stdout
-        var backupContent = null;
         if (preBackup !== null && knownFile &&
             path.resolve(report.file) === path.resolve(knownFile)) {
           backupContent = preBackup;
@@ -184,7 +184,10 @@ function createApp(deps) {
           time:        new Date().toTimeString().slice(0, 5)
         });
       }
-      res.json(Object.assign({}, report, { backupId: backupId }));
+      res.json(Object.assign({}, report, {
+        backupId: backupId,
+        hasBackup: (backupContent !== null && backupContent !== undefined)
+      }));
     } catch (err) {
       res.status(500).json({ error: err.message || 'claude CLI error' });
     }

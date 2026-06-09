@@ -113,13 +113,15 @@ describe('POST /edit-source', () => {
     assert.equal(res.body.fallbackToDom, true);
   });
 
-  it('returns edited status with file from claude report', async () => {
-    const app = createApp(reportSpawn('{ "status":"edited", "file":"/var/www/html/ai-editor/inject.js", "summary":"ok" }'));
+  it('returns edited status with file, newHtml and hasBackup from report', async () => {
+    const app = createApp(reportSpawn('{ "status":"edited", "file":"/var/www/html/ai-editor/inject.js", "newHtml":"<p>y</p>", "summary":"ok" }'));
     const res = await request(app).post('/edit-source')
       .send({ url: { origin: 'http://localhost', pathname: '/ai-editor/' }, outerHTML: '<p>x</p>', uniqueText: 'x', instruction: 'do' });
     assert.equal(res.status, 200);
     assert.equal(res.body.status, 'edited');
     assert.equal(res.body.file, '/var/www/html/ai-editor/inject.js');
+    assert.equal(res.body.newHtml, '<p>y</p>');
+    assert.equal(typeof res.body.hasBackup, 'boolean');
   });
 
   it('returns 500 when claude CLI fails', async () => {

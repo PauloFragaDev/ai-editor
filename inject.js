@@ -582,8 +582,9 @@
     if (x2 - x1 < 5 || y2 - y1 < 5) return;
     var target = findContainingElement(x1, y1, x2, y2);
     if (target) {
-      // Crear indicador de selección persistente (se elimina al cerrar el panel)
-      if (selectionIndicatorEl) { selectionIndicatorEl.remove(); }
+      // openPanel llama a closePanel internamente, que borraría el indicador
+      // si lo creamos antes. Lo creamos DESPUÉS de que openPanel termine.
+      openPanel(target);
       selectionIndicatorEl = document.createElement('div');
       selectionIndicatorEl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;' +
         'box-sizing:border-box;border:2px solid #3b82f6;background:rgba(59,130,246,0.12);' +
@@ -591,7 +592,6 @@
         'left:' + x1 + 'px;top:' + y1 + 'px;' +
         'width:' + (x2 - x1) + 'px;height:' + (y2 - y1) + 'px';
       document.body.appendChild(selectionIndicatorEl);
-      openPanel(target);
     }
   });
 

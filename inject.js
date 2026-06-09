@@ -146,9 +146,23 @@
         // trusted: response comes from our local server only
         tmp.innerHTML = data.html;
         var newEl = tmp.firstElementChild || tmp.firstChild;
+        if (!newEl) {
+          errorEl.textContent = 'La IA devolvió una respuesta vacía. Intenta de nuevo.';
+          errorEl.style.display = 'block';
+          applyBtn.disabled = false;
+          applyBtn.textContent = 'Aplicar';
+          inputEl.readOnly = false;
+          inputEl.focus();
+          return;
+        }
         if (hoveredEl === selectedEl) { hoveredEl = null; }
-        selectedEl.replaceWith(newEl);
-        selectedEl = newEl;
+        if (tmp.children.length > 1) {
+          selectedEl.replaceWith.apply(selectedEl, Array.prototype.slice.call(tmp.childNodes));
+          selectedEl = tmp.childNodes[0] || newEl;
+        } else {
+          selectedEl.replaceWith(newEl);
+          selectedEl = newEl;
+        }
 
         // Reset UI
         inputEl.value = '';

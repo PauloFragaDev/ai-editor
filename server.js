@@ -12,9 +12,10 @@ const { parseBackup } = require('./lib/parse-backup');
 const backupStore    = require('./lib/backup-store');
 
 function projectKeyFromUrl(url, config) {
-  // file:// → nombre del directorio que contiene el archivo
+  // file:// → nombre del archivo sin extensión (único e inequívoco)
   if (!url.origin || url.origin === 'null') {
-    return path.basename(path.dirname(url.pathname || '')) || 'local';
+    var fname = path.basename(url.pathname || '');
+    return fname ? fname.replace(/\.[^.]+$/, '') : 'local';
   }
   // Ruta explícita configurada → nombre del projectRoot configurado
   var routes = (config && config.routes) || [];
@@ -111,9 +112,14 @@ function createApp(deps) {
     }
 
     // Pre-leer el archivo si ya se conoce (evita pedirle a Claude que lo imprima)
+    var fileUrl = b.url || {};
     var knownFile = b.confirmFile ||
       (b.sourceHint && b.sourceHint.fileName) ||
-      b.componentFile || null;
+      b.componentFile ||
+      // Para file://, la pathname ES el archivo que se va a editar
+      ((!fileUrl.origin || fileUrl.origin === 'null') &&
+       path.isAbsolute(fileUrl.pathname || '') ? fileUrl.pathname : null) ||
+      null;
     var preBackup = null;
     if (knownFile && path.isAbsolute(knownFile) && fs.existsSync(knownFile)) {
       try { preBackup = fs.readFileSync(knownFile, 'utf-8'); } catch (e) { /* ignorar */ }

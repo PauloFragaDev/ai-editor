@@ -139,16 +139,13 @@ function createApp(deps) {
       var report = parseReport(proc.stdout);
       var backupId = null;
       if (report.status === 'edited' && report.file) {
-        var backupContent = parseBackup(proc.stdout);
-        if (backupContent !== null) {
-          backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
-          store.add(backupId, report.file, backupContent, {
-            projectKey:  projectKeyFromRoot(resolved.projectRoot),
-            instruction: (b.instruction || '').slice(0, 100),
-            tag:         b.tag || '?',
-            time:        new Date().toTimeString().slice(0, 5)
-          });
-        }
+        backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+        store.add(backupId, report.file, parseBackup(proc.stdout), {
+          projectKey:  projectKeyFromRoot(resolved.projectRoot),
+          instruction: (b.instruction || '').slice(0, 100),
+          tag:         b.tag || '?',
+          time:        new Date().toTimeString().slice(0, 5)
+        });
       }
       res.json(Object.assign({}, report, { backupId: backupId }));
     } catch (err) {

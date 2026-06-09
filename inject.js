@@ -226,7 +226,7 @@
                   '<span style="color:#9ca3af;white-space:nowrap">' + e.time + '</span>' +
                   '<span style="color:#6b7280;white-space:nowrap">&lt;' + e.tag + '&gt;</span>' +
                   '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(e.instruction) + '">' + escapeHtml(e.instruction) + '</span>' +
-                  (e.backupId ? '<button data-revert="' + i + '" style="flex-shrink:0;font-size:10px;padding:1px 5px;' +
+                  (e.backupId && e.hasBackup ? '<button data-revert="' + i + '" style="flex-shrink:0;font-size:10px;padding:1px 5px;' +
                     'border:1px solid #fca5a5;border-radius:3px;background:#fff;cursor:pointer;' +
                     'color:#dc2626;white-space:nowrap" title="Deshacer cambio en: ' + escapeHtml(e.file || '') + '">&#8617; deshacer</button>' : '') +
                   '</div>';

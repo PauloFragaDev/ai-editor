@@ -86,3 +86,46 @@ describe('POST /edit', () => {
     assert.ok(res.body.error);
   });
 });
+
+const path = require('path');
+
+function reportSpawn(stdout) {
+  return {
+    spawnSync: function () {
+      return { stdout: stdout, stderr: '', status: 0, signal: null, error: null };
+    }
+  };
+}
+
+describe('POST /edit-source', () => {
+  it('returns 400 when instruction is missing', async () => {
+    const app = createApp(reportSpawn('{}'));
+    const res = await request(app).post('/edit-source')
+      .send({ url: { origin: 'http://localhost', pathname: '/ai-editor/' }, outerHTML: '<p>x</p>' });
+    assert.equal(res.status, 400);
+  });
+
+  it('returns 422 fallbackToDom when project cannot be resolved', async () => {
+    const app = createApp(reportSpawn('{ "status":"edited" }'));
+    const res = await request(app).post('/edit-source')
+      .send({ url: { origin: 'http://localhost', pathname: '/../../etc/' }, outerHTML: '<p>x</p>', instruction: 'do' });
+    assert.equal(res.status, 422);
+    assert.equal(res.body.fallbackToDom, true);
+  });
+
+  it('returns edited status with file from claude report', async () => {
+    const app = createApp(reportSpawn('{ "status":"edited", "file":"/var/www/html/ai-editor/inject.js", "summary":"ok" }'));
+    const res = await request(app).post('/edit-source')
+      .send({ url: { origin: 'http://localhost', pathname: '/ai-editor/' }, outerHTML: '<p>x</p>', uniqueText: 'x', instruction: 'do' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'edited');
+    assert.equal(res.body.file, '/var/www/html/ai-editor/inject.js');
+  });
+
+  it('returns 500 when claude CLI fails', async () => {
+    const app = createApp(failSpawn('auth error'));
+    const res = await request(app).post('/edit-source')
+      .send({ url: { origin: 'http://localhost', pathname: '/ai-editor/' }, outerHTML: '<p>x</p>', uniqueText: 'x', instruction: 'do' });
+    assert.equal(res.status, 500);
+  });
+});

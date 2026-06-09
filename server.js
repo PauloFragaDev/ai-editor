@@ -2,7 +2,12 @@
 
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const { spawnSync } = require('child_process');
+const { resolveProject } = require('./lib/resolve-project');
+const { buildSourceEditPrompt } = require('./lib/build-prompt');
+const { parseReport } = require('./lib/parse-report');
 
 const PROMPT_PREFIX =
   'You are an HTML editor. The user provides an HTML snippet and an instruction. ' +
@@ -16,13 +21,23 @@ function stripCodeFences(text) {
     .trim();
 }
 
+function loadConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'projects.config.json'), 'utf-8'));
+  } catch (e) {
+    return { docRoot: '/var/www/html', routes: [] };
+  }
+}
+
 function createApp(deps) {
-  var spawn = (deps && deps.spawnSync) || spawnSync;
+  var spawn  = (deps && deps.spawnSync) || spawnSync;
+  var config = (deps && deps.config)    || loadConfig();
 
   var app = express();
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
 
+  // ── POST /edit  (modo DOM-efímero, fallback) ─────────────────────────────
   app.post('/edit', function (req, res) {
     var body = req.body || {};
     var html = body.html;
@@ -53,6 +68,69 @@ function createApp(deps) {
 
       var result = stripCodeFences(proc.stdout.trim());
       res.json({ html: result });
+    } catch (err) {
+      res.status(500).json({ error: err.message || 'claude CLI error' });
+    }
+  });
+
+  // ── POST /edit-source  (edita el archivo fuente real) ────────────────────
+  app.post('/edit-source', function (req, res) {
+    var b = req.body || {};
+
+    if (!b.instruction || (!b.outerHTML && !b.uniqueText)) {
+      return res.status(400).json({ error: 'instruction and outerHTML/uniqueText are required' });
+    }
+    if (!b.url || !b.url.origin) {
+      return res.status(400).json({ error: 'url is required' });
+    }
+
+    var resolved = resolveProject(b.url, config);
+    if (!resolved.projectRoot) {
+      return res.status(422).json({ error: 'could not resolve project root', fallbackToDom: true });
+    }
+
+    var prompt = buildSourceEditPrompt({
+      projectRoot:   resolved.projectRoot,
+      kind:          resolved.kind,
+      url:           b.url,
+      framework:     b.framework    || 'none',
+      sourceHint:    b.sourceHint   || null,
+      viteInspector: b.viteInspector || null,
+      componentFile: b.componentFile || null,
+      ancestors:     b.ancestors    || [],
+      attrs:         b.attrs        || {},
+      uniqueText:    b.uniqueText   || null,
+      outerHTML:     b.outerHTML    || '',
+      instruction:   b.instruction,
+      confirmFile:   b.confirmFile
+    });
+
+    try {
+      var proc = spawn('claude', [
+        '-p', prompt,
+        '--add-dir', resolved.projectRoot,
+        '--allowedTools', 'Read,Grep,Glob,Edit',
+        '--permission-mode', 'acceptEdits',
+        '--model', 'sonnet'
+      ], {
+        cwd:       resolved.projectRoot,
+        encoding:  'utf-8',
+        timeout:   120000,
+        maxBuffer: 10 * 1024 * 1024
+      });
+
+      if (proc.error) {
+        throw proc.error;
+      }
+
+      if (proc.status !== 0 || proc.signal) {
+        var msg2 = (proc.stderr || '').trim() ||
+          (proc.signal ? 'claude timed out' : 'claude exited with code ' + proc.status);
+        throw new Error(msg2);
+      }
+
+      var report = parseReport(proc.stdout);
+      res.json(report);
     } catch (err) {
       res.status(500).json({ error: err.message || 'claude CLI error' });
     }

@@ -4,19 +4,28 @@
   if (window.__aieLoaded) { console.log('[AI Editor] Ya está inyectado.'); return; }
   window.__aieLoaded = true;
 
-  // Reentrada automática tras recarga de página (modo edición persistente)
+  // Reentrada automática tras recarga de página
   if (sessionStorage.getItem('__aie_reenter') === '1') {
     sessionStorage.removeItem('__aie_reenter');
     window.addEventListener('load', function () { enterEditMode(); });
   }
 
   // ── State ────────────────────────────────────────────────────────────────
-  var editMode  = false;
-  var selectedEl = null;
-  var backupHTML = null;
-  var panelEl   = null;
-  var hoveredEl  = null;
-  var badgeEl   = null;
+  var editMode         = false;
+  var selectedEl       = null;
+  var backupHTML       = null;
+  var panelEl          = null;
+  var hoveredEl        = null;
+  var badgeEl          = null;
+  var toolbarEl        = null;
+  var historyEl        = null;
+  var historyCollapsed = false;
+  var selectionMode    = 'element'; // 'element' | 'area'
+  var sessionHistory   = [];
+  var areaDragging     = false;
+  var areaStartX       = 0;
+  var areaStartY       = 0;
+  var areaOverlay      = null;
 
   var SERVER_URL = 'http://localhost:3333/edit';
   var SOURCE_URL = 'http://localhost:3333/edit-source';
@@ -24,8 +33,10 @@
   // ── Helpers ──────────────────────────────────────────────────────────────
   function isEditorNode(el) {
     if (!el) return false;
-    if (panelEl && (el === panelEl || panelEl.contains(el))) return true;
-    if (badgeEl && (el === badgeEl || badgeEl.contains(el))) return true;
+    if (panelEl   && (el === panelEl   || panelEl.contains(el)))   return true;
+    if (badgeEl   && (el === badgeEl   || badgeEl.contains(el)))   return true;
+    if (toolbarEl && (el === toolbarEl || toolbarEl.contains(el))) return true;
+    if (historyEl && (el === historyEl || historyEl.contains(el))) return true;
     return false;
   }
 
@@ -37,20 +48,39 @@
       .replace(/"/g, '&quot;');
   }
 
+  function makeDraggable(el) {
+    var dragging = false, ox = 0, oy = 0;
+    el.addEventListener('mousedown', function (e) {
+      if (e.target.tagName === 'BUTTON') return;
+      dragging = true;
+      ox = e.clientX - el.getBoundingClientRect().left;
+      oy = e.clientY - el.getBoundingClientRect().top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var x = Math.max(0, Math.min(window.innerWidth  - el.offsetWidth,  e.clientX - ox));
+      var y = Math.max(0, Math.min(window.innerHeight - el.offsetHeight, e.clientY - oy));
+      el.style.left   = x + 'px';
+      el.style.top    = y + 'px';
+      el.style.right  = 'auto';
+      el.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', function () { dragging = false; });
+  }
+
   // ── Evidence collection ──────────────────────────────────────────────────
   function collectFrameworkHint(el) {
     var out = { framework: 'none', sourceHint: null, componentFile: null, viteInspector: null };
     try {
       var insp = el.closest && el.closest('[data-v-inspector]');
       if (insp) { out.framework = 'vue'; out.viteInspector = insp.getAttribute('data-v-inspector'); }
-
       var node = el;
       while (node && !out.componentFile) {
         var vc = node.__vueParentComponent;
         if (vc && vc.type && vc.type.__file) { out.framework = 'vue'; out.componentFile = vc.type.__file; break; }
         node = node.parentElement;
       }
-
       var key = Object.keys(el).find(function (k) { return k.indexOf('__reactFiber$') === 0; });
       if (key) {
         if (out.framework === 'none') { out.framework = 'react'; }
@@ -117,6 +147,154 @@
     return el;
   }
 
+  // ── Toolbar ──────────────────────────────────────────────────────────────
+  function createToolbar() {
+    var bar = document.createElement('div');
+    bar.style.cssText = [
+      'position:fixed', 'top:16px', 'left:50%', 'transform:translateX(-50%)',
+      'z-index:2147483647', 'background:#1f2937', 'border-radius:8px',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.3)',
+      'display:flex', 'align-items:center', 'gap:4px', 'padding:6px 8px',
+      'font-family:-apple-system,BlinkMacSystemFont,sans-serif',
+      'user-select:none', 'cursor:move'
+    ].join(';');
+
+    function btnStyle(active) {
+      return 'padding:5px 12px;border:none;border-radius:5px;font-size:12px;' +
+        'font-weight:500;cursor:pointer;' +
+        (active ? 'background:#3b82f6;color:#fff' : 'background:#374151;color:#d1d5db');
+    }
+
+    bar.innerHTML =
+      '<button id="__aie_mode_el" style="' + btnStyle(true)  + '">⬚ Elemento</button>' +
+      '<button id="__aie_mode_ar" style="' + btnStyle(false) + '">▦ \xC1rea</button>' +
+      '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
+      '<button id="__aie_tb_close" style="background:none;border:none;color:#9ca3af;' +
+        'font-size:18px;cursor:pointer;padding:0 4px;line-height:1">&times;</button>';
+
+    var btnEl = bar.querySelector('#__aie_mode_el');
+    var btnAr = bar.querySelector('#__aie_mode_ar');
+
+    function updateModes() {
+      btnEl.style.cssText = btnStyle(selectionMode === 'element');
+      btnAr.style.cssText = btnStyle(selectionMode === 'area');
+      document.body.style.cursor = selectionMode === 'area' ? 'crosshair' : '';
+    }
+
+    btnEl.addEventListener('click', function () { selectionMode = 'element'; updateModes(); });
+    btnAr.addEventListener('click', function () { selectionMode = 'area';    updateModes(); });
+    bar.querySelector('#__aie_tb_close').addEventListener('click', exitEditMode);
+
+    makeDraggable(bar);
+    return bar;
+  }
+
+  // ── History panel ────────────────────────────────────────────────────────
+  function renderHistory(panel) {
+    if (!panel) return;
+    panel.innerHTML =
+      '<div style="padding:10px 12px;background:#f9fafb;border-bottom:1px solid #e5e7eb;' +
+        'display:flex;align-items:center;gap:6px;cursor:move">' +
+        '<span style="font-size:12px;font-weight:600;color:#374151;flex:1">Historial</span>' +
+        '<button id="__aie_hist_clear" style="font-size:11px;padding:2px 8px;' +
+          'border:1px solid #d1d5db;border-radius:4px;background:#fff;cursor:pointer;color:#6b7280">Limpiar</button>' +
+        '<button id="__aie_hist_toggle" style="background:none;border:none;cursor:pointer;' +
+          'color:#6b7280;font-size:13px;padding:0 2px">' + (historyCollapsed ? '▼' : '▲') + '</button>' +
+        '<button id="__aie_hist_close" style="background:none;border:none;cursor:pointer;' +
+          'color:#9ca3af;font-size:18px;padding:0 2px;line-height:1">&times;</button>' +
+      '</div>' +
+      (historyCollapsed ? '' :
+        '<div style="max-height:180px;overflow-y:auto;padding:8px 12px">' +
+          (sessionHistory.length === 0
+            ? '<div style="font-size:12px;color:#9ca3af;text-align:center;padding:10px 0">Sin cambios a\xFAn</div>'
+            : sessionHistory.map(function (e) {
+                return '<div style="font-size:11px;padding:4px 0;border-bottom:1px solid #f3f4f6;color:#374151">' +
+                  '<span style="color:#9ca3af;margin-right:6px">' + e.time + '</span>' +
+                  '<span style="color:#6b7280;margin-right:6px">&lt;' + e.tag + '&gt;</span>' +
+                  escapeHtml(e.instruction) + '</div>';
+              }).join('')
+          ) +
+        '</div>'
+      ) +
+      '<div style="padding:8px 12px;border-top:1px solid #e5e7eb">' +
+        '<button id="__aie_hist_undo" ' + (backupHTML ? '' : 'disabled ') +
+          'style="width:100%;padding:6px;background:#f3f4f6;color:#374151;' +
+          'border:1px solid #d1d5db;border-radius:6px;font-size:12px;cursor:pointer;' +
+          (backupHTML ? '' : 'opacity:0.45;') + '">' +
+          '↩ Deshacer \xFAltimo cambio</button>' +
+      '</div>';
+
+    panel.querySelector('#__aie_hist_clear').addEventListener('click', function () {
+      sessionHistory = []; renderHistory(panel);
+    });
+    panel.querySelector('#__aie_hist_toggle').addEventListener('click', function () {
+      historyCollapsed = !historyCollapsed; renderHistory(panel);
+    });
+    panel.querySelector('#__aie_hist_close').addEventListener('click', function () {
+      panel.remove(); historyEl = null;
+    });
+    panel.querySelector('#__aie_hist_undo').addEventListener('click', function () {
+      if (backupHTML) { doUndo(); }
+    });
+  }
+
+  function createHistoryPanel() {
+    var panel = document.createElement('div');
+    panel.style.cssText = [
+      'position:fixed', 'bottom:24px', 'left:24px',
+      'z-index:2147483647', 'width:300px',
+      'background:#fff', 'border-radius:12px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.18)',
+      'font-family:-apple-system,BlinkMacSystemFont,sans-serif',
+      'overflow:hidden', 'box-sizing:border-box'
+    ].join(';');
+    renderHistory(panel);
+    makeDraggable(panel);
+    return panel;
+  }
+
+  function addHistoryEntry(el, instruction) {
+    var now  = new Date();
+    var time = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50) });
+    if (historyEl) { renderHistory(historyEl); }
+  }
+
+  // ── Undo ─────────────────────────────────────────────────────────────────
+  function doUndo() {
+    if (!backupHTML || !selectedEl) return;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = backupHTML;
+    var restored = tmp.firstElementChild || tmp.firstChild;
+    if (restored) { selectedEl.replaceWith(restored); selectedEl = restored; }
+    backupHTML = null;
+    if (historyEl) { renderHistory(historyEl); }
+    if (panelEl) {
+      var btn = panelEl.querySelector('#__aie_undo');
+      if (btn) { btn.style.display = 'none'; }
+    }
+  }
+
+  // ── Area selection ───────────────────────────────────────────────────────
+  function findContainingElement(x1, y1, x2, y2) {
+    var seen = [], best = null, bestArea = Infinity;
+    [[x1,y1],[x2,y1],[x1,y2],[x2,y2]].forEach(function (pt) {
+      (document.elementsFromPoint(pt[0], pt[1]) || []).forEach(function (el) {
+        if (!isEditorNode(el) && el !== document.body && el !== document.documentElement && seen.indexOf(el) < 0) {
+          seen.push(el);
+        }
+      });
+    });
+    seen.forEach(function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.left <= x1 && r.top <= y1 && r.right >= x2 && r.bottom >= y2) {
+        var area = r.width * r.height;
+        if (area < bestArea) { bestArea = area; best = el; }
+      }
+    });
+    return best;
+  }
+
   // ── Panel ────────────────────────────────────────────────────────────────
   function createPanel(html) {
     var panel = document.createElement('div');
@@ -155,7 +333,7 @@
       '</div>' +
       '<div style="padding:10px 16px;border-top:1px solid #e5e7eb;' +
         'display:flex;gap:8px;align-items:center">' +
-        '<button id="__aie_undo" style="display:none;padding:7px 14px;' +
+        '<button id="__aie_undo" style="display:' + (backupHTML ? '' : 'none') + ';padding:7px 14px;' +
           'background:#f3f4f6;color:#374151;border:1px solid #d1d5db;' +
           'border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap">' +
           'Deshacer</button>' +
@@ -171,7 +349,6 @@
   // ── Open / Close panel ───────────────────────────────────────────────────
   function openPanel(el) {
     closePanel();
-    backupHTML = null;
     selectedEl = el;
     panelEl = createPanel(el.outerHTML);
     document.body.appendChild(panelEl);
@@ -183,37 +360,19 @@
     var msgEl    = panelEl.querySelector('#__aie_msg');
 
     closeBtn.addEventListener('click', closePanel);
-
-    // Focus textarea (tiny delay so paint completes first)
     setTimeout(function () { inputEl.focus(); }, 40);
 
-    // ── Panel helpers ──────────────────────────────────────────────────────
     function showMsg(text, color) {
-      msgEl.textContent = text;
-      msgEl.style.color = color || '#374151';
-      msgEl.style.display = 'block';
+      msgEl.textContent = text; msgEl.style.color = color || '#374151'; msgEl.style.display = 'block';
     }
+    function hideMsg() { msgEl.style.display = 'none'; }
+    function resetApplyBtn() { applyBtn.disabled = false; applyBtn.textContent = 'Aplicar'; inputEl.readOnly = false; }
 
-    function hideMsg() {
-      msgEl.style.display = 'none';
-    }
-
-    function resetApplyBtn() {
-      applyBtn.disabled = false;
-      applyBtn.textContent = 'Aplicar';
-      inputEl.readOnly = false;
-    }
-
-    // Aplica el HTML recibido directamente al DOM (fallback efímero)
     function applyHtmlToDom(newHtml) {
       var tmp = document.createElement('div');
       tmp.innerHTML = newHtml;
       var newEl = tmp.firstElementChild || tmp.firstChild;
-      if (!newEl) {
-        showMsg('La IA devolvió una respuesta vacía. Intenta de nuevo.', '#ef4444');
-        resetApplyBtn();
-        return;
-      }
+      if (!newEl) { showMsg('La IA devolvió una respuesta vacía.', '#ef4444'); resetApplyBtn(); return; }
       backupHTML = selectedEl.outerHTML;
       if (hoveredEl === selectedEl) { hoveredEl = null; }
       if (tmp.children.length > 1) {
@@ -223,163 +382,98 @@
         selectedEl.replaceWith(newEl);
         selectedEl = newEl;
       }
-      inputEl.value = '';
       undoBtn.style.display = '';
-      resetApplyBtn();
-      inputEl.focus();
+      if (historyEl) { renderHistory(historyEl); }
+      inputEl.value = ''; resetApplyBtn(); inputEl.focus();
     }
 
-    // Fallback: llama a /edit y aplica al DOM
     function domFallback(evidence) {
       showMsg('Editando en pantalla (modo temporal)…', '#6b7280');
       fetch(SERVER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ html: evidence.outerHTML, instruction: evidence.instruction })
       })
-      .then(function (r) {
-        return r.json().then(function (j) { return { ok: r.ok, body: j }; });
-      })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
       .then(function (res) {
         if (!res.ok) { throw new Error(res.body.error || 'Error del servidor'); }
-        hideMsg();
-        applyHtmlToDom(res.body.html);
+        hideMsg(); applyHtmlToDom(res.body.html);
       })
-      .catch(function (err) {
-        showMsg(err.message || 'Error al aplicar el cambio.', '#ef4444');
-        resetApplyBtn();
-      });
+      .catch(function (err) { showMsg(err.message || 'Error al aplicar.', '#ef4444'); resetApplyBtn(); });
     }
 
-    // Muestra lista de archivos candidatos para que el usuario elija
     function renderCandidates(candidates, evidence) {
-      msgEl.innerHTML = '';
-      msgEl.style.display = 'block';
-      msgEl.style.color = '#374151';
-
+      msgEl.innerHTML = ''; msgEl.style.display = 'block'; msgEl.style.color = '#374151';
       var label = document.createElement('div');
       label.style.cssText = 'font-size:12px;margin-bottom:6px';
       label.textContent = 'Ambiguo — elige el archivo a editar:';
       msgEl.appendChild(label);
-
       candidates.forEach(function (c) {
         var btn = document.createElement('button');
-        btn.textContent = c.split('/').slice(-2).join('/'); // mostrar solo últimas 2 partes
-        btn.title = c;
-        btn.style.cssText = 'display:block;width:100%;text-align:left;padding:4px 8px;' +
-          'margin-bottom:4px;border:1px solid #d1d5db;border-radius:4px;' +
-          'background:#f9fafb;cursor:pointer;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        btn.textContent = c.split('/').slice(-2).join('/'); btn.title = c;
+        btn.style.cssText = 'display:block;width:100%;text-align:left;padding:4px 8px;margin-bottom:4px;' +
+          'border:1px solid #d1d5db;border-radius:4px;background:#f9fafb;cursor:pointer;' +
+          'font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
         btn.addEventListener('click', function () {
-          hideMsg();
-          applyBtn.disabled = true;
-          applyBtn.textContent = 'Editando archivo fuente…';
+          hideMsg(); applyBtn.disabled = true; applyBtn.textContent = 'Editando archivo fuente…';
           var ev2 = Object.assign({}, evidence, { confirmFile: c });
-          fetch(SOURCE_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(ev2)
-          })
-          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+          fetch(SOURCE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ev2) })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
           .then(function (res) {
-            if (!res.ok) { throw new Error(res.body.error || 'Error del servidor'); }
+            if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
-              sessionStorage.setItem('__aie_reenter', '1');
-              location.reload();
-            } else {
-              showMsg('No se pudo editar el archivo seleccionado.', '#ef4444');
-              resetApplyBtn();
-            }
+              addHistoryEntry(selectedEl, evidence.instruction);
+              sessionStorage.setItem('__aie_reenter', '1'); location.reload();
+            } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
-          .catch(function (err) {
-            showMsg(err.message || 'Error al editar.', '#ef4444');
-            resetApplyBtn();
-          });
+          .catch(function (err) { showMsg(err.message || 'Error.', '#ef4444'); resetApplyBtn(); });
         });
         msgEl.appendChild(btn);
       });
     }
 
-    // ── Apply ──────────────────────────────────────────────────────────────
     applyBtn.addEventListener('click', function () {
       var instruction = inputEl.value.trim();
       if (!instruction) { inputEl.focus(); return; }
-
-      applyBtn.disabled = true;
-      applyBtn.textContent = 'Editando archivo fuente…';
-      inputEl.readOnly = true;
-      hideMsg();
-
+      applyBtn.disabled = true; applyBtn.textContent = 'Editando archivo fuente…';
+      inputEl.readOnly = true; hideMsg();
       var evidence = buildEvidence(selectedEl, instruction);
-
-      fetch(SOURCE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(evidence)
-      })
-      .then(function (r) {
-        return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
-      })
+      fetch(SOURCE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(evidence) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
-        if (res.status === 422 && res.body.fallbackToDom) {
-          inputEl.readOnly = false;
-          return domFallback(evidence);
-        }
+        if (res.status === 422 && res.body.fallbackToDom) { inputEl.readOnly = false; return domFallback(evidence); }
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
-
         var rep = res.body;
         if (rep.status === 'edited') {
+          addHistoryEntry(selectedEl, instruction);
           if (rep.affectsMultiple) {
-            showMsg('Plantilla/loop reutilizado (' + rep.file + '). El cambio afectar\xe1 a todas sus instancias. Recargando…', '#92400e');
-            setTimeout(function () {
-              sessionStorage.setItem('__aie_reenter', '1');
-              location.reload();
-            }, 2000);
+            showMsg('Plantilla reutilizada (' + rep.file + '). Afectar\xE1 a todas las instancias. Recargando…', '#92400e');
+            setTimeout(function () { sessionStorage.setItem('__aie_reenter', '1'); location.reload(); }, 2000);
           } else {
-            sessionStorage.setItem('__aie_reenter', '1');
-            location.reload();
+            sessionStorage.setItem('__aie_reenter', '1'); location.reload();
           }
         } else if (rep.status === 'ambiguous') {
-          inputEl.readOnly = false;
-          resetApplyBtn();
-          renderCandidates(rep.candidates || [], evidence);
+          inputEl.readOnly = false; resetApplyBtn(); renderCandidates(rep.candidates || [], evidence);
         } else {
-          // not_found
-          inputEl.readOnly = false;
-          resetApplyBtn();
-          showMsg('No se localiz\xf3 el archivo fuente.', '#ef4444');
+          inputEl.readOnly = false; resetApplyBtn();
+          showMsg('No se localiz\xF3 el archivo fuente.', '#ef4444');
           var fbBtn = document.createElement('button');
           fbBtn.textContent = 'Editar solo en pantalla (temporal)';
           fbBtn.style.cssText = 'margin-top:6px;padding:4px 10px;border:1px solid #d1d5db;' +
             'border-radius:4px;background:#f3f4f6;cursor:pointer;font-size:12px;display:block';
           fbBtn.addEventListener('click', function () {
-            fbBtn.remove();
-            applyBtn.disabled = true;
-            applyBtn.textContent = 'Consultando IA…';
-            inputEl.readOnly = true;
-            hideMsg();
-            domFallback(evidence);
+            fbBtn.remove(); applyBtn.disabled = true; applyBtn.textContent = 'Consultando IA…';
+            inputEl.readOnly = true; hideMsg(); domFallback(evidence);
           });
           msgEl.appendChild(fbBtn);
         }
       })
       .catch(function (err) {
-        showMsg('Error: ' + (err.message || 'fallo desconocido') + '. Revisa con git si el archivo qued\xf3 a medias.', '#ef4444');
-        inputEl.readOnly = false;
-        resetApplyBtn();
+        showMsg('Error: ' + (err.message || 'desconocido') + '. Revisa con git.', '#ef4444');
+        inputEl.readOnly = false; resetApplyBtn();
       });
     });
 
-    // ── Undo ───────────────────────────────────────────────────────────────
-    undoBtn.addEventListener('click', function () {
-      if (!backupHTML) return;
-      var tmp = document.createElement('div');
-      tmp.innerHTML = backupHTML;
-      var restored = tmp.firstElementChild || tmp.firstChild;
-      selectedEl.replaceWith(restored);
-      selectedEl = restored;
-      backupHTML = null;
-      undoBtn.style.display = 'none';
-    });
+    undoBtn.addEventListener('click', doUndo);
   }
 
   function closePanel() {
@@ -390,14 +484,25 @@
   // ── Edit mode on/off ─────────────────────────────────────────────────────
   function enterEditMode() {
     editMode = true;
-    badgeEl = createBadge();
+    selectionMode = 'element';
+    sessionHistory = [];
+    historyCollapsed = false;
+    badgeEl   = createBadge();
+    toolbarEl = createToolbar();
+    historyEl = createHistoryPanel();
     document.body.appendChild(badgeEl);
+    document.body.appendChild(toolbarEl);
+    document.body.appendChild(historyEl);
   }
 
   function exitEditMode() {
     editMode = false;
-    if (badgeEl)   { badgeEl.remove();  badgeEl = null; }
+    document.body.style.cursor = '';
+    if (badgeEl)   { badgeEl.remove();   badgeEl   = null; }
+    if (toolbarEl) { toolbarEl.remove(); toolbarEl = null; }
+    if (historyEl) { historyEl.remove(); historyEl = null; }
     if (hoveredEl) { hoveredEl.style.outline = ''; hoveredEl = null; }
+    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
     backupHTML = null;
     closePanel();
   }
@@ -410,35 +515,58 @@
       editMode ? exitEditMode() : enterEditMode();
       return;
     }
-    if (e.key === 'Escape') {
-      exitEditMode();
-    }
+    if (e.key === 'Escape') { exitEditMode(); }
   });
 
   document.addEventListener('mouseover', function (e) {
-    if (!editMode || isEditorNode(e.target)) return;
-    if (hoveredEl && hoveredEl !== e.target) {
-      hoveredEl.style.outline = '';
-    }
+    if (!editMode || selectionMode !== 'element' || isEditorNode(e.target)) return;
+    if (hoveredEl && hoveredEl !== e.target) { hoveredEl.style.outline = ''; }
     hoveredEl = e.target;
     hoveredEl.style.outline = '2px solid #3b82f6';
   });
 
   document.addEventListener('mouseout', function (e) {
-    if (!editMode || isEditorNode(e.target)) return;
-    if (e.target === hoveredEl) {
-      e.target.style.outline = '';
-      hoveredEl = null;
-    }
+    if (!editMode || selectionMode !== 'element' || isEditorNode(e.target)) return;
+    if (e.target === hoveredEl) { e.target.style.outline = ''; hoveredEl = null; }
   });
 
-  // Capture phase so we intercept before link/button default actions
   document.addEventListener('click', function (e) {
-    if (!editMode || isEditorNode(e.target)) return;
+    if (!editMode || selectionMode !== 'element' || isEditorNode(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
     openPanel(e.target);
   }, true);
 
-  console.log('[AI Editor] Inyectado. Alt+E para activar el modo edici\xf3n.');
+  document.addEventListener('mousedown', function (e) {
+    if (!editMode || selectionMode !== 'area' || isEditorNode(e.target)) return;
+    areaDragging = true;
+    areaStartX = e.clientX; areaStartY = e.clientY;
+    areaOverlay = document.createElement('div');
+    areaOverlay.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;' +
+      'border:2px dashed #3b82f6;background:rgba(59,130,246,0.08);box-sizing:border-box;' +
+      'left:' + areaStartX + 'px;top:' + areaStartY + 'px;width:0;height:0';
+    document.body.appendChild(areaOverlay);
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    if (!areaDragging || !areaOverlay) return;
+    areaOverlay.style.left   = Math.min(e.clientX, areaStartX) + 'px';
+    areaOverlay.style.top    = Math.min(e.clientY, areaStartY) + 'px';
+    areaOverlay.style.width  = Math.abs(e.clientX - areaStartX) + 'px';
+    areaOverlay.style.height = Math.abs(e.clientY - areaStartY) + 'px';
+  });
+
+  document.addEventListener('mouseup', function (e) {
+    if (!areaDragging) return;
+    areaDragging = false;
+    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
+    var x1 = Math.min(e.clientX, areaStartX), y1 = Math.min(e.clientY, areaStartY);
+    var x2 = Math.max(e.clientX, areaStartX), y2 = Math.max(e.clientY, areaStartY);
+    if (x2 - x1 < 5 || y2 - y1 < 5) return;
+    var target = findContainingElement(x1, y1, x2, y2);
+    if (target) { openPanel(target); }
+  });
+
+  console.log('[AI Editor] Inyectado. Alt+E para activar el modo edici\xF3n.');
 }());

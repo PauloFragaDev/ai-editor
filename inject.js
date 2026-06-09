@@ -474,11 +474,15 @@
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
               addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId, res.body.hasBackup);
-              if (res.body.newHtml && !res.body.affectsMultiple) {
+              if (res.body.newHtml) {
                 applyHtmlToDom(res.body.newHtml);
                 repositionIndicator();
-                showMsg('Editado ✓ (archivo guardado)', '#059669');
-                setTimeout(hideMsg, 2500);
+                if (res.body.affectsMultiple) {
+                  showMsg('Guardado · plantilla compartida (afecta otras p\xE1ginas)', '#92400e');
+                } else {
+                  showMsg('Editado ✓ (archivo guardado)', '#059669');
+                  setTimeout(hideMsg, 2500);
+                }
               } else {
                 reloadPage();
               }
@@ -504,14 +508,15 @@
         var rep = res.body;
         if (rep.status === 'edited') {
           addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId, rep.hasBackup);
-          if (rep.newHtml && !rep.affectsMultiple) {
+          if (rep.newHtml) {
             applyHtmlToDom(rep.newHtml);
             repositionIndicator();
-            showMsg('Editado ✓ (archivo guardado)', '#059669');
-            setTimeout(hideMsg, 2500);
-          } else if (rep.affectsMultiple) {
-            showMsg('Plantilla reutilizada (' + rep.file + '). Afectar\xE1 a todas las instancias. Recargando…', '#92400e');
-            setTimeout(reloadPage, 2000);
+            if (rep.affectsMultiple) {
+              showMsg('Guardado · plantilla compartida (afecta otras p\xE1ginas)', '#92400e');
+            } else {
+              showMsg('Editado ✓ (archivo guardado)', '#059669');
+              setTimeout(hideMsg, 2500);
+            }
           } else {
             reloadPage();
           }

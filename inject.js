@@ -32,11 +32,9 @@
   var SOURCE_URL  = 'http://localhost:3333/edit-source';
   var HISTORY_URL = 'http://localhost:3333/history';
 
-  function getProjectKey() {
-    if (!location.origin || location.origin === 'null') {
-      return location.pathname.split('/').slice(0, 4).join('/');
-    }
-    return location.origin;
+  function historyQS() {
+    return '?origin=' + encodeURIComponent(location.origin) +
+           '&pathname=' + encodeURIComponent(location.pathname);
   }
 
   function reloadPage() {
@@ -254,7 +252,7 @@
       }
     });
     panel.querySelector('#__aie_hist_clear').addEventListener('click', function () {
-      fetch(HISTORY_URL + '?projectKey=' + encodeURIComponent(getProjectKey()), { method: 'DELETE' })
+      fetch(HISTORY_URL + historyQS(), { method: 'DELETE' })
         .catch(function () {});
       sessionHistory = [];
       renderHistory(panel);
@@ -540,7 +538,7 @@
     document.body.appendChild(toolbarEl);
     document.body.appendChild(historyEl);
     // Carga el historial del proyecto desde el servidor
-    fetch(HISTORY_URL + '?projectKey=' + encodeURIComponent(getProjectKey()))
+    fetch(HISTORY_URL + historyQS())
       .then(function (r) { return r.json(); })
       .then(function (entries) {
         sessionHistory = entries;

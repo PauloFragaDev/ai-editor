@@ -11,11 +11,8 @@ const { parseReport } = require('./lib/parse-report');
 const { parseBackup } = require('./lib/parse-backup');
 const backupStore    = require('./lib/backup-store');
 
-function projectKeyFromUrl(url) {
-  if (!url.origin || url.origin === 'null') {
-    return (url.pathname || '').split('/').slice(0, 4).join('/');
-  }
-  return url.origin;
+function projectKeyFromRoot(projectRoot) {
+  return path.basename(projectRoot || 'unknown');
 }
 
 const PROMPT_PREFIX =
@@ -146,7 +143,7 @@ function createApp(deps) {
         if (backupContent !== null) {
           backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
           store.add(backupId, report.file, backupContent, {
-            projectKey:  projectKeyFromUrl(b.url),
+            projectKey:  projectKeyFromRoot(resolved.projectRoot),
             instruction: (b.instruction || '').slice(0, 100),
             tag:         b.tag || '?',
             time:        new Date().toTimeString().slice(0, 5)
@@ -161,13 +158,17 @@ function createApp(deps) {
 
   // ── GET /history  (historial de ediciones de un proyecto) ───────────────────
   app.get('/history', function (req, res) {
-    var projectKey = req.query.projectKey || '';
+    var url = { origin: req.query.origin || '', pathname: req.query.pathname || '/' };
+    var resolved = resolveProject(url, config);
+    var projectKey = projectKeyFromRoot(resolved.projectRoot);
     res.json(store.forProject(projectKey));
   });
 
   // ── DELETE /history  (limpiar historial y backups de un proyecto) ────────────
   app.delete('/history', function (req, res) {
-    var projectKey = req.query.projectKey || '';
+    var url = { origin: req.query.origin || '', pathname: req.query.pathname || '/' };
+    var resolved = resolveProject(url, config);
+    var projectKey = projectKeyFromRoot(resolved.projectRoot);
     store.clearProject(projectKey);
     res.json({ ok: true });
   });

@@ -1,0 +1,5 @@
+1. Instalar: cd ai-editor && npm install
+2. Exportar clave: export ANTHROPIC_API_KEY=sk-ant-...
+3. Iniciar servidor: npm start
+4. En cualquier página local, pegar el contenido de inject.js en la consola del navegador (o añadir <script src="/.../inject.js"></script>)
+5. Alt+E activa el modo edición; hover resalta elementos, click abre el panel; Escape para salir

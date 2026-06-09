@@ -5,25 +5,25 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 const { createApp } = require('../server');
 
-function mockAnthropic(responseText) {
+function mockSpawn(stdout) {
   return {
-    messages: {
-      create: async () => ({ content: [{ text: responseText }] })
+    spawnSync: function () {
+      return { stdout: stdout, stderr: '', status: 0, signal: null, error: null };
     }
   };
 }
 
-function errorAnthropic(message) {
+function failSpawn(stderr) {
   return {
-    messages: {
-      create: async () => { throw new Error(message); }
+    spawnSync: function () {
+      return { stdout: '', stderr: stderr, status: 1, signal: null, error: null };
     }
   };
 }
 
 describe('POST /edit', () => {
   it('returns 400 when html is missing', async () => {
-    const app = createApp(mockAnthropic('<p>ok</p>'));
+    const app = createApp(mockSpawn('<p>ok</p>'));
     const res = await request(app)
       .post('/edit')
       .send({ instruction: 'make it red' });
@@ -32,7 +32,7 @@ describe('POST /edit', () => {
   });
 
   it('returns 400 when instruction is missing', async () => {
-    const app = createApp(mockAnthropic('<p>ok</p>'));
+    const app = createApp(mockSpawn('<p>ok</p>'));
     const res = await request(app)
       .post('/edit')
       .send({ html: '<p>hello</p>' });
@@ -41,7 +41,7 @@ describe('POST /edit', () => {
   });
 
   it('returns 400 when body is empty', async () => {
-    const app = createApp(mockAnthropic('<p>ok</p>'));
+    const app = createApp(mockSpawn('<p>ok</p>'));
     const res = await request(app).post('/edit').send({});
     assert.equal(res.status, 400);
     assert.ok(res.body.error);
@@ -49,7 +49,7 @@ describe('POST /edit', () => {
 
   it('returns modified html from Claude', async () => {
     const modified = '<p style="color:red">hello</p>';
-    const app = createApp(mockAnthropic(modified));
+    const app = createApp(mockSpawn(modified));
     const res = await request(app)
       .post('/edit')
       .send({ html: '<p>hello</p>', instruction: 'make text red' });
@@ -59,7 +59,7 @@ describe('POST /edit', () => {
 
   it('strips ```html ... ``` code fences from Claude response', async () => {
     const wrapped = '```html\n<p style="color:red">hello</p>\n```';
-    const app = createApp(mockAnthropic(wrapped));
+    const app = createApp(mockSpawn(wrapped));
     const res = await request(app)
       .post('/edit')
       .send({ html: '<p>hello</p>', instruction: 'make text red' });
@@ -69,7 +69,7 @@ describe('POST /edit', () => {
 
   it('strips ``` ... ``` code fences without language tag', async () => {
     const wrapped = '```\n<p>changed</p>\n```';
-    const app = createApp(mockAnthropic(wrapped));
+    const app = createApp(mockSpawn(wrapped));
     const res = await request(app)
       .post('/edit')
       .send({ html: '<p>hello</p>', instruction: 'change it' });
@@ -77,8 +77,8 @@ describe('POST /edit', () => {
     assert.equal(res.body.html, '<p>changed</p>');
   });
 
-  it('returns 500 when Claude throws', async () => {
-    const app = createApp(errorAnthropic('API error'));
+  it('returns 500 when claude CLI fails', async () => {
+    const app = createApp(failSpawn('authentication error'));
     const res = await request(app)
       .post('/edit')
       .send({ html: '<p>hello</p>', instruction: 'break it' });

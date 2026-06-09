@@ -2,11 +2,12 @@
 
 const express = require('express');
 const cors = require('cors');
+const { spawnSync } = require('child_process');
 
-const SYSTEM_PROMPT =
+const PROMPT_PREFIX =
   'You are an HTML editor. The user provides an HTML snippet and an instruction. ' +
   'Return ONLY the modified HTML — no explanation, no markdown, no code blocks. ' +
-  'Return raw HTML only.';
+  'Return raw HTML only.\n\n';
 
 function stripCodeFences(text) {
   return text
@@ -15,38 +16,45 @@ function stripCodeFences(text) {
     .trim();
 }
 
-function createApp(anthropic) {
-  const app = express();
+function createApp(deps) {
+  var spawn = (deps && deps.spawnSync) || spawnSync;
+
+  var app = express();
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
 
-  app.post('/edit', async (req, res) => {
-    const { html, instruction } = req.body || {};
+  app.post('/edit', function (req, res) {
+    var body = req.body || {};
+    var html = body.html;
+    var instruction = body.instruction;
 
     if (!html || !instruction) {
       return res.status(400).json({ error: 'html and instruction are required' });
     }
 
-    const claudeCall = anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [
-        { role: 'user', content: `HTML:\n${html}\n\nInstruction: ${instruction}` }
-      ]
-    });
-
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out after 30s')), 30_000)
-    );
+    var prompt = PROMPT_PREFIX + 'HTML:\n' + html + '\n\nInstruction: ' + instruction;
 
     try {
-      const message = await Promise.race([claudeCall, timeout]);
-      const result = stripCodeFences(message.content[0].text);
+      var proc = spawn('claude', ['-p', prompt], {
+        encoding: 'utf-8',
+        timeout: 30000,
+        maxBuffer: 10 * 1024 * 1024
+      });
+
+      if (proc.error) {
+        throw proc.error;
+      }
+
+      if (proc.status !== 0 || proc.signal) {
+        var msg = (proc.stderr || '').trim() ||
+          (proc.signal ? 'claude timed out' : 'claude exited with code ' + proc.status);
+        throw new Error(msg);
+      }
+
+      var result = stripCodeFences(proc.stdout.trim());
       res.json({ html: result });
     } catch (err) {
-      claudeCall.catch(() => {}); // silence dangling rejection if timeout won the race
-      res.status(500).json({ error: err.message || 'Claude API error' });
+      res.status(500).json({ error: err.message || 'claude CLI error' });
     }
   });
 
@@ -54,12 +62,10 @@ function createApp(anthropic) {
 }
 
 if (require.main === module) {
-  const Anthropic = require('@anthropic-ai/sdk');
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const app = createApp(anthropic);
-  app.listen(3333, () =>
-    console.log('[AI Editor] Server running on http://localhost:3333')
-  );
+  var app = createApp();
+  app.listen(3333, function () {
+    console.log('[AI Editor] Server running on http://localhost:3333');
+  });
 }
 
 module.exports = { createApp };

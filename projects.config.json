@@ -1,0 +1,7 @@
+{
+  "docRoot": "/var/www/html",
+  "routes": [
+    { "match": "http://localhost:8000", "projectRoot": "/var/www/html/iqv", "kind": "laravel" },
+    { "match": "http://localhost:5173", "projectRoot": "/var/www/html/day-portal-client", "kind": "spa-vue" }
+  ]
+}

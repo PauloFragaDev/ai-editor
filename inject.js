@@ -28,11 +28,18 @@
   var areaOverlay           = null;  // overlay temporal mientras se arrastra
   var selectionIndicatorEl  = null;  // indicador fijo tras soltar el ratón
 
-  var SERVER_URL = 'http://localhost:3333/edit';
-  var SOURCE_URL = 'http://localhost:3333/edit-source';
+  var SERVER_URL  = 'http://localhost:3333/edit';
+  var SOURCE_URL  = 'http://localhost:3333/edit-source';
+  var HISTORY_URL = 'http://localhost:3333/history';
+
+  function getProjectKey() {
+    if (!location.origin || location.origin === 'null') {
+      return location.pathname.split('/').slice(0, 4).join('/');
+    }
+    return location.origin;
+  }
 
   function reloadPage() {
-    sessionStorage.setItem('__aie_history', JSON.stringify(sessionHistory));
     sessionStorage.setItem('__aie_reenter', '1');
     location.reload();
   }
@@ -136,7 +143,8 @@
       viteInspector: hint.viteInspector, componentFile: hint.componentFile,
       outerHTML: (el.outerHTML || '').slice(0, 4096),
       ancestors: buildAncestors(el), uniqueText: pickUniqueText(el),
-      attrs: attrs, instruction: instruction
+      attrs: attrs, instruction: instruction,
+      tag: (el.tagName || '?').toLowerCase()
     };
   }
 
@@ -246,7 +254,10 @@
       }
     });
     panel.querySelector('#__aie_hist_clear').addEventListener('click', function () {
-      sessionHistory = []; renderHistory(panel);
+      fetch(HISTORY_URL + '?projectKey=' + encodeURIComponent(getProjectKey()), { method: 'DELETE' })
+        .catch(function () {});
+      sessionHistory = [];
+      renderHistory(panel);
     });
     panel.querySelector('#__aie_hist_toggle').addEventListener('click', function () {
       historyCollapsed = !historyCollapsed; renderHistory(panel);
@@ -520,13 +531,7 @@
   function enterEditMode() {
     editMode = true;
     selectionMode = 'element';
-    var saved = sessionStorage.getItem('__aie_history');
-    if (saved) {
-      try { sessionHistory = JSON.parse(saved); } catch (e) { sessionHistory = []; }
-      sessionStorage.removeItem('__aie_history');
-    } else {
-      sessionHistory = [];
-    }
+    sessionHistory = [];
     historyCollapsed = false;
     badgeEl   = createBadge();
     toolbarEl = createToolbar();
@@ -534,6 +539,14 @@
     document.body.appendChild(badgeEl);
     document.body.appendChild(toolbarEl);
     document.body.appendChild(historyEl);
+    // Carga el historial del proyecto desde el servidor
+    fetch(HISTORY_URL + '?projectKey=' + encodeURIComponent(getProjectKey()))
+      .then(function (r) { return r.json(); })
+      .then(function (entries) {
+        sessionHistory = entries;
+        if (historyEl) { renderHistory(historyEl); }
+      })
+      .catch(function () {});
   }
 
   function exitEditMode() {

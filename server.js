@@ -9,6 +9,14 @@ const { resolveProject } = require('./lib/resolve-project');
 const { buildSourceEditPrompt } = require('./lib/build-prompt');
 const { parseReport } = require('./lib/parse-report');
 const { parseBackup } = require('./lib/parse-backup');
+const backupStore    = require('./lib/backup-store');
+
+function projectKeyFromUrl(url) {
+  if (!url.origin || url.origin === 'null') {
+    return (url.pathname || '').split('/').slice(0, 4).join('/');
+  }
+  return url.origin;
+}
 
 const PROMPT_PREFIX =
   'You are an HTML editor. The user provides an HTML snippet and an instruction. ' +
@@ -31,9 +39,9 @@ function loadConfig() {
 }
 
 function createApp(deps) {
-  var spawn       = (deps && deps.spawnSync) || spawnSync;
-  var config      = (deps && deps.config)    || loadConfig();
-  var backupStore = {};  // { [id]: { file, content } }
+  var spawn  = (deps && deps.spawnSync) || spawnSync;
+  var config = (deps && deps.config)    || loadConfig();
+  var store  = (deps && deps.backupStore) || backupStore;
 
   var app = express();
   app.use(cors());
@@ -137,9 +145,12 @@ function createApp(deps) {
         var backupContent = parseBackup(proc.stdout);
         if (backupContent !== null) {
           backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
-          backupStore[backupId] = { file: report.file, content: backupContent };
-          var keys = Object.keys(backupStore);
-          if (keys.length > 100) { delete backupStore[keys[0]]; }
+          store.add(backupId, report.file, backupContent, {
+            projectKey:  projectKeyFromUrl(b.url),
+            instruction: (b.instruction || '').slice(0, 100),
+            tag:         b.tag || '?',
+            time:        new Date().toTimeString().slice(0, 5)
+          });
         }
       }
       res.json(Object.assign({}, report, { backupId: backupId }));
@@ -148,19 +159,26 @@ function createApp(deps) {
     }
   });
 
+  // ── GET /history  (historial de ediciones de un proyecto) ───────────────────
+  app.get('/history', function (req, res) {
+    var projectKey = req.query.projectKey || '';
+    res.json(store.forProject(projectKey));
+  });
+
+  // ── DELETE /history  (limpiar historial y backups de un proyecto) ────────────
+  app.delete('/history', function (req, res) {
+    var projectKey = req.query.projectKey || '';
+    store.clearProject(projectKey);
+    res.json({ ok: true });
+  });
+
   // ── POST /restore-backup  (restaura el archivo al estado previo a la edición) ─
   app.post('/restore-backup', function (req, res) {
     var b = req.body || {};
     if (!b.backupId) return res.status(400).json({ error: 'backupId required' });
-    var entry = backupStore[b.backupId];
-    if (!entry) return res.status(404).json({ error: 'backup no encontrado (el servidor puede haberse reiniciado)' });
-    try {
-      fs.writeFileSync(entry.file, entry.content, 'utf-8');
-      delete backupStore[b.backupId];
-      res.json({ ok: true, file: entry.file });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    var result = store.restore(b.backupId);
+    if (result.error) return res.status(404).json(result);
+    res.json(result);
   });
 
   // ── GET /inject.js  (sirve el script para inyección manual o Tampermonkey) ─

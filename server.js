@@ -27,26 +27,25 @@ function createApp(anthropic) {
       return res.status(400).json({ error: 'html and instruction are required' });
     }
 
+    const claudeCall = anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [
+        { role: 'user', content: `HTML:\n${html}\n\nInstruction: ${instruction}` }
+      ]
+    });
+
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Request timed out after 30s')), 30_000)
     );
 
     try {
-      const message = await Promise.race([
-        anthropic.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 4096,
-          system: SYSTEM_PROMPT,
-          messages: [
-            { role: 'user', content: `HTML:\n${html}\n\nInstruction: ${instruction}` }
-          ]
-        }),
-        timeout
-      ]);
-
+      const message = await Promise.race([claudeCall, timeout]);
       const result = stripCodeFences(message.content[0].text);
       res.json({ html: result });
     } catch (err) {
+      claudeCall.catch(() => {}); // silence dangling rejection if timeout won the race
       res.status(500).json({ error: err.message || 'Claude API error' });
     }
   });

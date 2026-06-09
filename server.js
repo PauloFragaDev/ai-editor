@@ -110,6 +110,15 @@ function createApp(deps) {
       return res.status(422).json({ error: 'could not resolve project root', fallbackToDom: true });
     }
 
+    // Pre-leer el archivo si ya se conoce (evita pedirle a Claude que lo imprima)
+    var knownFile = b.confirmFile ||
+      (b.sourceHint && b.sourceHint.fileName) ||
+      b.componentFile || null;
+    var preBackup = null;
+    if (knownFile && path.isAbsolute(knownFile) && fs.existsSync(knownFile)) {
+      try { preBackup = fs.readFileSync(knownFile, 'utf-8'); } catch (e) { /* ignorar */ }
+    }
+
     var prompt = buildSourceEditPrompt({
       projectRoot:   resolved.projectRoot,
       kind:          resolved.kind,
@@ -136,7 +145,7 @@ function createApp(deps) {
       ], {
         cwd:       resolved.projectRoot,
         encoding:  'utf-8',
-        timeout:   120000,
+        timeout:   180000,
         maxBuffer: 10 * 1024 * 1024
       });
 
@@ -153,8 +162,16 @@ function createApp(deps) {
       var report = parseReport(proc.stdout);
       var backupId = null;
       if (report.status === 'edited' && report.file) {
+        // Backup: pre-leído si el archivo era conocido, si no intenta parsear del stdout
+        var backupContent = null;
+        if (preBackup !== null && knownFile &&
+            path.resolve(report.file) === path.resolve(knownFile)) {
+          backupContent = preBackup;
+        } else {
+          backupContent = parseBackup(proc.stdout);
+        }
         backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
-        store.add(backupId, report.file, parseBackup(proc.stdout), {
+        store.add(backupId, report.file, backupContent, {
           projectKey:  projectKeyFromUrl(b.url, config),
           instruction: (b.instruction || '').slice(0, 100),
           tag:         b.tag || '?',

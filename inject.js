@@ -30,6 +30,12 @@
   var SERVER_URL = 'http://localhost:3333/edit';
   var SOURCE_URL = 'http://localhost:3333/edit-source';
 
+  function reloadPage() {
+    sessionStorage.setItem('__aie_history', JSON.stringify(sessionHistory));
+    sessionStorage.setItem('__aie_reenter', '1');
+    location.reload();
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────────────
   function isEditorNode(el) {
     if (!el) return false;
@@ -422,7 +428,7 @@
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
               addHistoryEntry(selectedEl, evidence.instruction);
-              sessionStorage.setItem('__aie_reenter', '1'); location.reload();
+              reloadPage();
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
           .catch(function (err) { showMsg(err.message || 'Error.', '#ef4444'); resetApplyBtn(); });
@@ -447,9 +453,9 @@
           addHistoryEntry(selectedEl, instruction);
           if (rep.affectsMultiple) {
             showMsg('Plantilla reutilizada (' + rep.file + '). Afectar\xE1 a todas las instancias. Recargando…', '#92400e');
-            setTimeout(function () { sessionStorage.setItem('__aie_reenter', '1'); location.reload(); }, 2000);
+            setTimeout(reloadPage, 2000);
           } else {
-            sessionStorage.setItem('__aie_reenter', '1'); location.reload();
+            reloadPage();
           }
         } else if (rep.status === 'ambiguous') {
           inputEl.readOnly = false; resetApplyBtn(); renderCandidates(rep.candidates || [], evidence);
@@ -477,7 +483,8 @@
   }
 
   function closePanel() {
-    if (panelEl) { panelEl.remove(); panelEl = null; }
+    if (panelEl)     { panelEl.remove();     panelEl     = null; }
+    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
     selectedEl = null;
   }
 
@@ -485,7 +492,13 @@
   function enterEditMode() {
     editMode = true;
     selectionMode = 'element';
-    sessionHistory = [];
+    var saved = sessionStorage.getItem('__aie_history');
+    if (saved) {
+      try { sessionHistory = JSON.parse(saved); } catch (e) { sessionHistory = []; }
+      sessionStorage.removeItem('__aie_history');
+    } else {
+      sessionHistory = [];
+    }
     historyCollapsed = false;
     badgeEl   = createBadge();
     toolbarEl = createToolbar();
@@ -560,12 +573,24 @@
   document.addEventListener('mouseup', function (e) {
     if (!areaDragging) return;
     areaDragging = false;
-    if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
     var x1 = Math.min(e.clientX, areaStartX), y1 = Math.min(e.clientY, areaStartY);
     var x2 = Math.max(e.clientX, areaStartX), y2 = Math.max(e.clientY, areaStartY);
-    if (x2 - x1 < 5 || y2 - y1 < 5) return;
+    if (x2 - x1 < 5 || y2 - y1 < 5) {
+      if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
+      return;
+    }
+    // Convertir el overlay a indicador de selección fija (borde sólido)
+    if (areaOverlay) {
+      areaOverlay.style.border = '2px solid #3b82f6';
+      areaOverlay.style.background = 'rgba(59,130,246,0.12)';
+      areaOverlay.style.boxShadow = '0 0 0 1px rgba(59,130,246,0.4)';
+    }
     var target = findContainingElement(x1, y1, x2, y2);
-    if (target) { openPanel(target); }
+    if (target) {
+      openPanel(target);
+    } else {
+      if (areaOverlay) { areaOverlay.remove(); areaOverlay = null; }
+    }
   });
 
   console.log('[AI Editor] Inyectado. Alt+E para activar el modo edici\xF3n.');

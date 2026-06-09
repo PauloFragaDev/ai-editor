@@ -214,11 +214,16 @@
         '<div style="max-height:180px;overflow-y:auto;padding:8px 12px">' +
           (sessionHistory.length === 0
             ? '<div style="font-size:12px;color:#9ca3af;text-align:center;padding:10px 0">Sin cambios a\xFAn</div>'
-            : sessionHistory.map(function (e) {
-                return '<div style="font-size:11px;padding:4px 0;border-bottom:1px solid #f3f4f6;color:#374151">' +
-                  '<span style="color:#9ca3af;margin-right:6px">' + e.time + '</span>' +
-                  '<span style="color:#6b7280;margin-right:6px">&lt;' + e.tag + '&gt;</span>' +
-                  escapeHtml(e.instruction) + '</div>';
+            : sessionHistory.map(function (e, i) {
+                return '<div style="font-size:11px;padding:4px 0;border-bottom:1px solid #f3f4f6;' +
+                  'display:flex;align-items:center;gap:4px">' +
+                  '<span style="color:#9ca3af;white-space:nowrap">' + e.time + '</span>' +
+                  '<span style="color:#6b7280;white-space:nowrap">&lt;' + e.tag + '&gt;</span>' +
+                  '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(e.instruction) + '">' + escapeHtml(e.instruction) + '</span>' +
+                  (e.file ? '<button data-revert="' + i + '" style="flex-shrink:0;font-size:10px;padding:1px 5px;' +
+                    'border:1px solid #fca5a5;border-radius:3px;background:#fff;cursor:pointer;' +
+                    'color:#dc2626;white-space:nowrap" title="Revertir en git: ' + escapeHtml(e.file) + '">↩ git</button>' : '') +
+                  '</div>';
               }).join('')
           ) +
         '</div>'
@@ -231,6 +236,11 @@
           '↩ Deshacer \xFAltimo cambio</button>' +
       '</div>';
 
+    panel.querySelectorAll('[data-revert]').forEach(function (btn) {
+      var idx = parseInt(btn.getAttribute('data-revert'), 10);
+      var entry = sessionHistory[idx];
+      if (entry && entry.file) { btn.addEventListener('click', function () { revertFile(entry.file); }); }
+    });
     panel.querySelector('#__aie_hist_clear').addEventListener('click', function () {
       sessionHistory = []; renderHistory(panel);
     });
@@ -260,11 +270,24 @@
     return panel;
   }
 
-  function addHistoryEntry(el, instruction) {
+  function addHistoryEntry(el, instruction, file) {
     var now  = new Date();
     var time = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50) });
+    sessionHistory.push({ time: time, tag: (el.tagName || '?').toLowerCase(), instruction: instruction.slice(0, 50), file: file || null });
     if (historyEl) { renderHistory(historyEl); }
+  }
+
+  function revertFile(file) {
+    if (!confirm('Revertir "' + file.split('/').slice(-1)[0] + '" a la \xFAltima versi\xF3n en git?\nEsto deshace el cambio en el archivo fuente.')) return;
+    fetch('http://localhost:3333/revert-file', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file: file })
+    })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+    .then(function (res) {
+      if (res.ok && res.body.ok) { reloadPage(); }
+      else { alert('No se pudo revertir.\n' + (res.body.error || '') + '\nUsa manualmente: git checkout HEAD -- ' + file); }
+    })
+    .catch(function (err) { alert('Error: ' + err.message); });
   }
 
   // ── Undo ─────────────────────────────────────────────────────────────────
@@ -428,7 +451,7 @@
           .then(function (res) {
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
-              addHistoryEntry(selectedEl, evidence.instruction);
+              addHistoryEntry(selectedEl, evidence.instruction, res.body.file);
               reloadPage();
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
@@ -451,7 +474,7 @@
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
         var rep = res.body;
         if (rep.status === 'edited') {
-          addHistoryEntry(selectedEl, instruction);
+          addHistoryEntry(selectedEl, instruction, rep.file);
           if (rep.affectsMultiple) {
             showMsg('Plantilla reutilizada (' + rep.file + '). Afectar\xE1 a todas las instancias. Recargando…', '#92400e');
             setTimeout(reloadPage, 2000);

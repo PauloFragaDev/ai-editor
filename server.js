@@ -136,6 +136,32 @@ function createApp(deps) {
     }
   });
 
+  // ── POST /revert-file  (revierte un archivo editado vía git) ────────────────
+  app.post('/revert-file', function (req, res) {
+    var b = req.body || {};
+    if (!b.file) return res.status(400).json({ error: 'file is required' });
+
+    var file = b.file;
+    if (!path.isAbsolute(file) || path.resolve(file) !== file) {
+      return res.status(400).json({ error: 'invalid file path' });
+    }
+    if (!fs.existsSync(file)) {
+      return res.status(404).json({ error: 'file not found' });
+    }
+
+    var proc = spawn('git', ['checkout', 'HEAD', '--', file], {
+      cwd: path.dirname(file),
+      encoding: 'utf-8',
+      timeout: 10000
+    });
+
+    if (proc.error || proc.status !== 0) {
+      var msg = (proc.stderr || '').trim() || 'git checkout failed';
+      return res.status(500).json({ error: msg });
+    }
+    res.json({ ok: true });
+  });
+
   // ── GET /inject.js  (sirve el script para inyección manual o Tampermonkey) ─
   app.get('/inject.js', function (req, res) {
     res.setHeader('Content-Type', 'application/javascript');

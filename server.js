@@ -136,6 +136,44 @@ function createApp(deps) {
     }
   });
 
+  // ── GET /inject.js  (sirve el script para inyección manual o Tampermonkey) ─
+  app.get('/inject.js', function (req, res) {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.sendFile(path.join(__dirname, 'inject.js'));
+  });
+
+  // ── GET /userscript.user.js  (userscript de Tampermonkey) ────────────────
+  app.get('/userscript.user.js', function (req, res) {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.send([
+      '// ==UserScript==',
+      '// @name         AI Editor',
+      '// @namespace    http://localhost:3333/',
+      '// @version      1.1',
+      '// @description  AI visual editor — auto-inject on localhost and local files',
+      '// @match        http://localhost*',
+      '// @match        http://127.0.0.1*',
+      '// @match        file://*',
+      '// @grant        GM_xmlhttpRequest',
+      '// @connect      localhost',
+      '// ==/UserScript==',
+      '(function() {',
+      '  GM_xmlhttpRequest({',
+      '    method: "GET",',
+      '    url: "http://localhost:3333/inject.js?t=" + Date.now(),',
+      '    onload: function(r) {',
+      '      var blob = new Blob([r.responseText], {type:"application/javascript"});',
+      '      var blobUrl = URL.createObjectURL(blob);',
+      '      var s = document.createElement("script");',
+      '      s.src = blobUrl;',
+      '      s.onload = function() { URL.revokeObjectURL(blobUrl); };',
+      '      document.head.appendChild(s);',
+      '    }',
+      '  });',
+      '}());'
+    ].join('\n'));
+  });
+
   return app;
 }
 

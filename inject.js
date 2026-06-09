@@ -4,6 +4,12 @@
   if (window.__aieLoaded) { console.log('[AI Editor] Ya está inyectado.'); return; }
   window.__aieLoaded = true;
 
+  // Reentrada automática tras recarga de página (modo edición persistente)
+  if (sessionStorage.getItem('__aie_reenter') === '1') {
+    sessionStorage.removeItem('__aie_reenter');
+    window.addEventListener('load', function () { enterEditMode(); });
+  }
+
   // ── State ────────────────────────────────────────────────────────────────
   var editMode  = false;
   var selectedEl = null;
@@ -13,6 +19,7 @@
   var badgeEl   = null;
 
   var SERVER_URL = 'http://localhost:3333/edit';
+  var SOURCE_URL = 'http://localhost:3333/edit-source';
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   function isEditorNode(el) {
@@ -144,8 +151,7 @@
           'border:1px solid #d1d5db;border-radius:6px;font-size:13px;' +
           'resize:vertical;outline:none;font-family:inherit;' +
           'transition:border-color .15s"></textarea>' +
-        '<div id="__aie_error" style="color:#ef4444;font-size:12px;' +
-          'margin-top:6px;display:none"></div>' +
+        '<div id="__aie_msg" style="font-size:12px;margin-top:6px;display:none"></div>' +
       '</div>' +
       '<div style="padding:10px 16px;border-top:1px solid #e5e7eb;' +
         'display:flex;gap:8px;align-items:center">' +
@@ -170,81 +176,196 @@
     panelEl = createPanel(el.outerHTML);
     document.body.appendChild(panelEl);
 
-    var closeBtn  = panelEl.querySelector('#__aie_close');
-    var applyBtn  = panelEl.querySelector('#__aie_apply');
-    var undoBtn   = panelEl.querySelector('#__aie_undo');
-    var inputEl   = panelEl.querySelector('#__aie_instruction');
-    var errorEl   = panelEl.querySelector('#__aie_error');
+    var closeBtn = panelEl.querySelector('#__aie_close');
+    var applyBtn = panelEl.querySelector('#__aie_apply');
+    var undoBtn  = panelEl.querySelector('#__aie_undo');
+    var inputEl  = panelEl.querySelector('#__aie_instruction');
+    var msgEl    = panelEl.querySelector('#__aie_msg');
 
     closeBtn.addEventListener('click', closePanel);
 
     // Focus textarea (tiny delay so paint completes first)
     setTimeout(function () { inputEl.focus(); }, 40);
 
+    // ── Panel helpers ──────────────────────────────────────────────────────
+    function showMsg(text, color) {
+      msgEl.textContent = text;
+      msgEl.style.color = color || '#374151';
+      msgEl.style.display = 'block';
+    }
+
+    function hideMsg() {
+      msgEl.style.display = 'none';
+    }
+
+    function resetApplyBtn() {
+      applyBtn.disabled = false;
+      applyBtn.textContent = 'Aplicar';
+      inputEl.readOnly = false;
+    }
+
+    // Aplica el HTML recibido directamente al DOM (fallback efímero)
+    function applyHtmlToDom(newHtml) {
+      var tmp = document.createElement('div');
+      tmp.innerHTML = newHtml;
+      var newEl = tmp.firstElementChild || tmp.firstChild;
+      if (!newEl) {
+        showMsg('La IA devolvió una respuesta vacía. Intenta de nuevo.', '#ef4444');
+        resetApplyBtn();
+        return;
+      }
+      backupHTML = selectedEl.outerHTML;
+      if (hoveredEl === selectedEl) { hoveredEl = null; }
+      if (tmp.children.length > 1) {
+        selectedEl.replaceWith.apply(selectedEl, Array.prototype.slice.call(tmp.childNodes));
+        selectedEl = tmp.childNodes[0] || newEl;
+      } else {
+        selectedEl.replaceWith(newEl);
+        selectedEl = newEl;
+      }
+      inputEl.value = '';
+      undoBtn.style.display = '';
+      resetApplyBtn();
+      inputEl.focus();
+    }
+
+    // Fallback: llama a /edit y aplica al DOM
+    function domFallback(evidence) {
+      showMsg('Editando en pantalla (modo temporal)…', '#6b7280');
+      fetch(SERVER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: evidence.outerHTML, instruction: evidence.instruction })
+      })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, body: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.body.error || 'Error del servidor'); }
+        hideMsg();
+        applyHtmlToDom(res.body.html);
+      })
+      .catch(function (err) {
+        showMsg(err.message || 'Error al aplicar el cambio.', '#ef4444');
+        resetApplyBtn();
+      });
+    }
+
+    // Muestra lista de archivos candidatos para que el usuario elija
+    function renderCandidates(candidates, evidence) {
+      msgEl.innerHTML = '';
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#374151';
+
+      var label = document.createElement('div');
+      label.style.cssText = 'font-size:12px;margin-bottom:6px';
+      label.textContent = 'Ambiguo — elige el archivo a editar:';
+      msgEl.appendChild(label);
+
+      candidates.forEach(function (c) {
+        var btn = document.createElement('button');
+        btn.textContent = c.split('/').slice(-2).join('/'); // mostrar solo últimas 2 partes
+        btn.title = c;
+        btn.style.cssText = 'display:block;width:100%;text-align:left;padding:4px 8px;' +
+          'margin-bottom:4px;border:1px solid #d1d5db;border-radius:4px;' +
+          'background:#f9fafb;cursor:pointer;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        btn.addEventListener('click', function () {
+          hideMsg();
+          applyBtn.disabled = true;
+          applyBtn.textContent = 'Editando archivo fuente…';
+          var ev2 = Object.assign({}, evidence, { confirmFile: c });
+          fetch(SOURCE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ev2)
+          })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+          .then(function (res) {
+            if (!res.ok) { throw new Error(res.body.error || 'Error del servidor'); }
+            if (res.body.status === 'edited') {
+              sessionStorage.setItem('__aie_reenter', '1');
+              location.reload();
+            } else {
+              showMsg('No se pudo editar el archivo seleccionado.', '#ef4444');
+              resetApplyBtn();
+            }
+          })
+          .catch(function (err) {
+            showMsg(err.message || 'Error al editar.', '#ef4444');
+            resetApplyBtn();
+          });
+        });
+        msgEl.appendChild(btn);
+      });
+    }
+
     // ── Apply ──────────────────────────────────────────────────────────────
     applyBtn.addEventListener('click', function () {
       var instruction = inputEl.value.trim();
       if (!instruction) { inputEl.focus(); return; }
 
-      // Loading state
       applyBtn.disabled = true;
-      applyBtn.textContent = 'Consultando IA…';
+      applyBtn.textContent = 'Editando archivo fuente…';
       inputEl.readOnly = true;
-      errorEl.style.display = 'none';
+      hideMsg();
 
-      fetch(SERVER_URL, {
+      var evidence = buildEvidence(selectedEl, instruction);
+
+      fetch(SOURCE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html: selectedEl.outerHTML, instruction: instruction })
+        body: JSON.stringify(evidence)
+      })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
       })
       .then(function (res) {
-        return res.json().then(function (data) {
-          if (!res.ok) throw new Error(data.error || 'Error ' + res.status);
-          return data;
-        });
-      })
-      .then(function (data) {
-        // Save backup before replacing
-        backupHTML = selectedEl.outerHTML;
-
-        // Replace element in DOM
-        var tmp = document.createElement('div');
-        // trusted: response comes from our local server only
-        tmp.innerHTML = data.html;
-        var newEl = tmp.firstElementChild || tmp.firstChild;
-        if (!newEl) {
-          errorEl.textContent = 'La IA devolvió una respuesta vacía. Intenta de nuevo.';
-          errorEl.style.display = 'block';
-          applyBtn.disabled = false;
-          applyBtn.textContent = 'Aplicar';
+        if (res.status === 422 && res.body.fallbackToDom) {
           inputEl.readOnly = false;
-          inputEl.focus();
-          return;
+          return domFallback(evidence);
         }
-        if (hoveredEl === selectedEl) { hoveredEl = null; }
-        if (tmp.children.length > 1) {
-          selectedEl.replaceWith.apply(selectedEl, Array.prototype.slice.call(tmp.childNodes));
-          selectedEl = tmp.childNodes[0] || newEl;
-        } else {
-          selectedEl.replaceWith(newEl);
-          selectedEl = newEl;
-        }
+        if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
 
-        // Reset UI
-        inputEl.value = '';
-        undoBtn.style.display = '';
-        applyBtn.disabled = false;
-        applyBtn.textContent = 'Aplicar';
-        inputEl.readOnly = false;
-        inputEl.focus();
+        var rep = res.body;
+        if (rep.status === 'edited') {
+          if (rep.affectsMultiple) {
+            showMsg('Plantilla/loop reutilizado (' + rep.file + '). El cambio afectar\xe1 a todas sus instancias. Recargando…', '#92400e');
+            setTimeout(function () {
+              sessionStorage.setItem('__aie_reenter', '1');
+              location.reload();
+            }, 2000);
+          } else {
+            sessionStorage.setItem('__aie_reenter', '1');
+            location.reload();
+          }
+        } else if (rep.status === 'ambiguous') {
+          inputEl.readOnly = false;
+          resetApplyBtn();
+          renderCandidates(rep.candidates || [], evidence);
+        } else {
+          // not_found
+          inputEl.readOnly = false;
+          resetApplyBtn();
+          showMsg('No se localiz\xf3 el archivo fuente.', '#ef4444');
+          var fbBtn = document.createElement('button');
+          fbBtn.textContent = 'Editar solo en pantalla (temporal)';
+          fbBtn.style.cssText = 'margin-top:6px;padding:4px 10px;border:1px solid #d1d5db;' +
+            'border-radius:4px;background:#f3f4f6;cursor:pointer;font-size:12px;display:block';
+          fbBtn.addEventListener('click', function () {
+            fbBtn.remove();
+            applyBtn.disabled = true;
+            applyBtn.textContent = 'Consultando IA…';
+            inputEl.readOnly = true;
+            hideMsg();
+            domFallback(evidence);
+          });
+          msgEl.appendChild(fbBtn);
+        }
       })
       .catch(function (err) {
-        errorEl.textContent = err.message || 'No se pudo aplicar el cambio. Intenta de nuevo.';
-        errorEl.style.display = 'block';
-        applyBtn.disabled = false;
-        applyBtn.textContent = 'Aplicar';
+        showMsg('Error: ' + (err.message || 'fallo desconocido') + '. Revisa con git si el archivo qued\xf3 a medias.', '#ef4444');
         inputEl.readOnly = false;
-        inputEl.focus();
+        resetApplyBtn();
       });
     });
 

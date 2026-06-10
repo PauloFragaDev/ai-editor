@@ -377,12 +377,14 @@
     panel.style.cssText = [
       'position:fixed', 'bottom:24px', 'left:340px',
       'z-index:2147483647', 'width:420px',
+      'background:#0f172a',
       'border-radius:12px', 'box-shadow:0 8px 32px rgba(0,0,0,0.4)',
       'display:flex', 'flex-direction:column',
       'font-family:ui-monospace,SFMono-Regular,monospace',
       'overflow:hidden', 'box-sizing:border-box'
     ].join(';');
-    renderTerminalPanel(panel);
+    // Defer render so the panel is in the DOM when querySelector runs
+    setTimeout(function () { if (panel.isConnected) { renderTerminalPanel(panel); } }, 0);
     makeDraggable(panel);
     return panel;
   }
@@ -702,14 +704,10 @@
     terminalState    = 'idle';
     terminalInstr    = null;
     terminalOutput   = null;
-    badgeEl    = createBadge();
-    toolbarEl  = createToolbar();
-    historyEl  = createHistoryPanel();
-    terminalEl = createTerminalPanel();
-    document.body.appendChild(badgeEl);
-    document.body.appendChild(toolbarEl);
-    document.body.appendChild(historyEl);
-    document.body.appendChild(terminalEl);
+    badgeEl   = createBadge();   document.body.appendChild(badgeEl);
+    toolbarEl = createToolbar(); document.body.appendChild(toolbarEl);
+    historyEl = createHistoryPanel(); document.body.appendChild(historyEl);
+    terminalEl = createTerminalPanel(); document.body.appendChild(terminalEl);
     // Carga el historial del proyecto desde el servidor
     fetch(HISTORY_URL + historyQS())
       .then(function (r) { return r.json(); })

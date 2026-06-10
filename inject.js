@@ -19,9 +19,14 @@
   var badgeEl          = null;
   var toolbarEl        = null;
   var historyEl        = null;
-  var historyCollapsed = false;
-  var selectionMode    = 'element'; // 'element' | 'area'
-  var terminalEl       = null;
+  var historyCollapsed  = false;
+  var selectionMode     = null;     // null | 'element' | 'area'
+  var terminalEl        = null;
+  var terminalCollapsed = false;
+  var terminalDark      = true;
+  var terminalState     = 'idle';   // 'idle' | 'working' | 'done'
+  var terminalInstr     = null;
+  var terminalOutput    = null;
   var sessionHistory   = [];
   var areaDragging          = false;
   var areaStartX            = 0;
@@ -181,10 +186,10 @@
     }
 
     bar.innerHTML =
-      '<button id="__aie_mode_el" style="' + btnStyle(true)  + '">⬚ Elemento</button>' +
+      '<button id="__aie_mode_el" style="' + btnStyle(false) + '">⬚ Elemento</button>' +
       '<button id="__aie_mode_ar" style="' + btnStyle(false) + '">▦ \xC1rea</button>' +
       '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
-      '<button id="__aie_tb_term" style="' + btnStyle(false) + '">⌨ Terminal</button>' +
+      '<button id="__aie_tb_term" style="' + btnStyle(true)  + '">⌨ Terminal</button>' +
       '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
       '<button id="__aie_tb_close" style="background:none;border:none;color:#9ca3af;' +
         'font-size:18px;cursor:pointer;padding:0 4px;line-height:1">&times;</button>';
@@ -199,8 +204,14 @@
       document.body.style.cursor = selectionMode === 'area' ? 'crosshair' : '';
     }
 
-    btnEl.addEventListener('click', function () { selectionMode = 'element'; updateModes(); });
-    btnAr.addEventListener('click', function () { selectionMode = 'area';    updateModes(); });
+    btnEl.addEventListener('click', function () {
+      selectionMode = (selectionMode === 'element') ? null : 'element';
+      updateModes();
+    });
+    btnAr.addEventListener('click', function () {
+      selectionMode = (selectionMode === 'area') ? null : 'area';
+      updateModes();
+    });
     btnTerm.addEventListener('click', function () {
       if (terminalEl) {
         terminalEl.remove(); terminalEl = null;
@@ -284,68 +295,103 @@
   }
 
   // ── Terminal panel ───────────────────────────────────────────────────────
-  function createTerminalPanel() {
-    var panel = document.createElement('div');
-    panel.style.cssText = [
-      'position:fixed', 'bottom:24px', 'left:340px',
-      'z-index:2147483647', 'width:420px', 'max-height:60vh',
-      'background:#0f172a', 'border-radius:12px',
-      'box-shadow:0 8px 32px rgba(0,0,0,0.4)',
-      'display:flex', 'flex-direction:column',
-      'font-family:ui-monospace,SFMono-Regular,monospace',
-      'overflow:hidden', 'box-sizing:border-box'
-    ].join(';');
+  function renderTerminalPanel(panel) {
+    if (!panel) return;
+    var dk = terminalDark;
+    var hBg     = dk ? '#1e293b' : '#f1f5f9';
+    var hBorder = dk ? '#334155' : '#e2e8f0';
+    var btnClr  = dk ? '#64748b' : '#94a3b8';
+    var titleClr= dk ? '#94a3b8' : '#475569';
+    var bodyBg  = dk ? '#0f172a' : '#ffffff';
+    var textClr = dk ? '#94a3b8' : '#64748b';
+    var promptClr = dk ? '#e2e8f0' : '#1e293b';
+    var dimClr  = dk ? '#475569' : '#94a3b8';
+
+    panel.style.background = bodyBg;
+
+    var bodyHtml = '';
+    if (!terminalCollapsed) {
+      var content = '';
+      if (terminalState === 'idle') {
+        content = '<span style="color:' + dimClr + '">En espera de una edici\xF3n…</span>';
+      } else if (terminalState === 'working') {
+        content =
+          '<div style="margin-bottom:8px">' +
+            '<span style="color:#3b82f6">$ </span>' +
+            '<span style="color:' + promptClr + '">' + escapeHtml(terminalInstr || '') + '</span>' +
+          '</div>' +
+          '<div style="color:#f59e0b">▶ enviando a Claude…</div>';
+      } else {
+        content =
+          '<div style="margin-bottom:8px">' +
+            '<span style="color:#3b82f6">$ </span>' +
+            '<span style="color:' + promptClr + '">' + escapeHtml(terminalInstr || '') + '</span>' +
+          '</div>' +
+          '<pre style="margin:0;white-space:pre-wrap;word-break:break-all;color:' + textClr + ';' +
+            'border-top:1px solid ' + hBorder + ';padding-top:8px;font-family:inherit;font-size:12px">' +
+            escapeHtml(terminalOutput || '(sin salida)') + '</pre>';
+      }
+      bodyHtml =
+        '<div id="__aie_term_body" style="overflow-y:auto;padding:12px;' +
+          'font-size:12px;color:' + textClr + ';min-height:80px;max-height:calc(60vh - 46px)">' +
+          content +
+        '</div>';
+    }
 
     panel.innerHTML =
-      '<div style="padding:10px 12px;background:#1e293b;border-bottom:1px solid #334155;' +
+      '<div style="padding:10px 12px;background:' + hBg + ';' +
+        'border-bottom:1px solid ' + (terminalCollapsed ? 'transparent' : hBorder) + ';' +
         'display:flex;align-items:center;gap:6px;cursor:move">' +
         '<span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>' +
         '<span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>' +
         '<span style="width:10px;height:10px;border-radius:50%;background:#22c55e;display:inline-block"></span>' +
-        '<span style="font-size:12px;font-weight:500;color:#94a3b8;flex:1;margin-left:4px">Claude I/O</span>' +
+        '<span style="font-size:12px;font-weight:500;color:' + titleClr + ';flex:1;margin-left:4px">Claude I/O</span>' +
+        '<button id="__aie_term_theme" title="' + (dk ? 'Modo claro' : 'Modo oscuro') + '" ' +
+          'style="background:none;border:none;cursor:pointer;color:' + btnClr + ';font-size:13px;padding:0 4px;line-height:1">' +
+          (dk ? '☀' : '◑') + '</button>' +
+        '<button id="__aie_term_toggle" style="background:none;border:none;cursor:pointer;' +
+          'color:' + btnClr + ';font-size:12px;padding:0 4px;line-height:1">' +
+          (terminalCollapsed ? '▼' : '▲') + '</button>' +
         '<button id="__aie_term_close" style="background:none;border:none;cursor:pointer;' +
-          'color:#64748b;font-size:18px;padding:0 2px;line-height:1">&times;</button>' +
+          'color:' + btnClr + ';font-size:18px;padding:0 2px;line-height:1">&times;</button>' +
       '</div>' +
-      '<div id="__aie_term_body" style="flex:1;overflow-y:auto;padding:12px;' +
-        'font-size:12px;color:#94a3b8;min-height:80px;max-height:calc(60vh - 46px)">' +
-        '<span style="color:#475569">En espera de una edici\xF3n…</span>' +
-      '</div>';
+      bodyHtml;
 
-    makeDraggable(panel);
-
+    panel.querySelector('#__aie_term_theme').addEventListener('click', function () {
+      terminalDark = !terminalDark; renderTerminalPanel(panel);
+    });
+    panel.querySelector('#__aie_term_toggle').addEventListener('click', function () {
+      terminalCollapsed = !terminalCollapsed; renderTerminalPanel(panel);
+    });
     panel.querySelector('#__aie_term_close').addEventListener('click', function () {
       panel.remove(); terminalEl = null;
       var tbBtn = toolbarEl && toolbarEl.querySelector('#__aie_tb_term');
-      if (tbBtn) {
-        tbBtn.style.background = '#374151'; tbBtn.style.color = '#d1d5db';
-      }
+      if (tbBtn) { tbBtn.style.background = '#374151'; tbBtn.style.color = '#d1d5db'; }
     });
+    var body = panel.querySelector('#__aie_term_body');
+    if (body) { body.scrollTop = body.scrollHeight; }
+  }
 
+  function createTerminalPanel() {
+    var panel = document.createElement('div');
+    panel.style.cssText = [
+      'position:fixed', 'bottom:24px', 'left:340px',
+      'z-index:2147483647', 'width:420px',
+      'border-radius:12px', 'box-shadow:0 8px 32px rgba(0,0,0,0.4)',
+      'display:flex', 'flex-direction:column',
+      'font-family:ui-monospace,SFMono-Regular,monospace',
+      'overflow:hidden', 'box-sizing:border-box'
+    ].join(';');
+    renderTerminalPanel(panel);
+    makeDraggable(panel);
     return panel;
   }
 
   function renderTerminal(state, instruction, output) {
-    if (!terminalEl) return;
-    var body = terminalEl.querySelector('#__aie_term_body');
-    if (!body) return;
-    if (state === 'working') {
-      body.innerHTML =
-        '<div style="margin-bottom:8px">' +
-          '<span style="color:#3b82f6">$ </span>' +
-          '<span style="color:#e2e8f0">' + escapeHtml(instruction) + '</span>' +
-        '</div>' +
-        '<div style="color:#f59e0b">▶ enviando a Claude…</div>';
-    } else {
-      body.innerHTML =
-        '<div style="margin-bottom:8px">' +
-          '<span style="color:#3b82f6">$ </span>' +
-          '<span style="color:#e2e8f0">' + escapeHtml(instruction) + '</span>' +
-        '</div>' +
-        '<pre style="margin:0;white-space:pre-wrap;word-break:break-all;color:#94a3b8;' +
-          'border-top:1px solid #1e293b;padding-top:8px;font-family:inherit;font-size:12px">' +
-          escapeHtml(output || '(sin salida)') + '</pre>';
-    }
-    body.scrollTop = body.scrollHeight;
+    terminalState  = state;
+    terminalInstr  = instruction;
+    terminalOutput = output;
+    if (terminalEl) { renderTerminalPanel(terminalEl); }
   }
 
   function createHistoryPanel() {
@@ -649,15 +695,21 @@
   // ── Edit mode on/off ─────────────────────────────────────────────────────
   function enterEditMode() {
     editMode = true;
-    selectionMode = 'element';
-    sessionHistory = [];
+    selectionMode    = null;
+    sessionHistory   = [];
     historyCollapsed = false;
-    badgeEl   = createBadge();
-    toolbarEl = createToolbar();
-    historyEl = createHistoryPanel();
+    terminalCollapsed = false;
+    terminalState    = 'idle';
+    terminalInstr    = null;
+    terminalOutput   = null;
+    badgeEl    = createBadge();
+    toolbarEl  = createToolbar();
+    historyEl  = createHistoryPanel();
+    terminalEl = createTerminalPanel();
     document.body.appendChild(badgeEl);
     document.body.appendChild(toolbarEl);
     document.body.appendChild(historyEl);
+    document.body.appendChild(terminalEl);
     // Carga el historial del proyecto desde el servidor
     fetch(HISTORY_URL + historyQS())
       .then(function (r) { return r.json(); })

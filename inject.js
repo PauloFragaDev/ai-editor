@@ -353,7 +353,7 @@
 
     panel.innerHTML =
       '<div style="padding:12px 16px;border-bottom:1px solid #e5e7eb;' +
-        'display:flex;justify-content:space-between;align-items:center">' +
+        'display:flex;justify-content:space-between;align-items:center;cursor:grab">' +
         '<span style="font-weight:600;font-size:14px;color:#111827">AI Editor</span>' +
         '<button id="__aie_close" style="background:none;border:none;cursor:pointer;' +
           'font-size:20px;color:#6b7280;line-height:1;padding:0">&times;</button>' +
@@ -395,6 +395,7 @@
     selectedEl = el;
     panelEl = createPanel(el.outerHTML);
     document.body.appendChild(panelEl);
+    makeDraggable(panelEl);
 
     var closeBtn = panelEl.querySelector('#__aie_close');
     var applyBtn = panelEl.querySelector('#__aie_apply');

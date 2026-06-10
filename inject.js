@@ -473,10 +473,10 @@
           .then(function (res) {
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
-              addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId, res.body.hasBackup);
               if (res.body.newHtml) {
                 applyHtmlToDom(res.body.newHtml);
                 repositionIndicator();
+                addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId, res.body.hasBackup);
                 if (res.body.affectsMultiple) {
                   showMsg('Guardado · plantilla compartida (afecta otras p\xE1ginas)', '#92400e');
                 } else {
@@ -484,7 +484,10 @@
                   setTimeout(hideMsg, 2500);
                 }
               } else {
-                reloadPage();
+                addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId, res.body.hasBackup);
+                var fname2 = (res.body.file || '').split('/').slice(-1)[0] || 'archivo';
+                resetApplyBtn();
+                showMsg('Guardado en ' + fname2 + '. Recarga t\xFA si quieres ver el efecto completo.', '#6b7280');
               }
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
@@ -507,10 +510,10 @@
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
         var rep = res.body;
         if (rep.status === 'edited') {
-          addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId, rep.hasBackup);
           if (rep.newHtml) {
-            applyHtmlToDom(rep.newHtml);
+            applyHtmlToDom(rep.newHtml);  // establece backupHTML antes de renderHistory
             repositionIndicator();
+            addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId, rep.hasBackup);
             if (rep.affectsMultiple) {
               showMsg('Guardado · plantilla compartida (afecta otras p\xE1ginas)', '#92400e');
             } else {
@@ -518,7 +521,10 @@
               setTimeout(hideMsg, 2500);
             }
           } else {
-            reloadPage();
+            addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId, rep.hasBackup);
+            var fname = (rep.file || '').split('/').slice(-1)[0] || 'archivo';
+            resetApplyBtn();
+            showMsg('Guardado en ' + fname + '. Recarga t\xFA si quieres ver el efecto completo.', '#6b7280');
           }
         } else if (rep.status === 'ambiguous') {
           inputEl.readOnly = false; resetApplyBtn(); renderCandidates(rep.candidates || [], evidence);

@@ -21,6 +21,7 @@
   var historyEl        = null;
   var historyCollapsed = false;
   var selectionMode    = 'element'; // 'element' | 'area'
+  var terminalEl       = null;
   var sessionHistory   = [];
   var areaDragging          = false;
   var areaStartX            = 0;
@@ -48,7 +49,8 @@
     if (panelEl   && (el === panelEl   || panelEl.contains(el)))   return true;
     if (badgeEl   && (el === badgeEl   || badgeEl.contains(el)))   return true;
     if (toolbarEl && (el === toolbarEl || toolbarEl.contains(el))) return true;
-    if (historyEl && (el === historyEl || historyEl.contains(el))) return true;
+    if (historyEl  && (el === historyEl  || historyEl.contains(el)))  return true;
+    if (terminalEl && (el === terminalEl || terminalEl.contains(el))) return true;
     return false;
   }
 
@@ -182,11 +184,14 @@
       '<button id="__aie_mode_el" style="' + btnStyle(true)  + '">⬚ Elemento</button>' +
       '<button id="__aie_mode_ar" style="' + btnStyle(false) + '">▦ \xC1rea</button>' +
       '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
+      '<button id="__aie_tb_term" style="' + btnStyle(false) + '">⌨ Terminal</button>' +
+      '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
       '<button id="__aie_tb_close" style="background:none;border:none;color:#9ca3af;' +
         'font-size:18px;cursor:pointer;padding:0 4px;line-height:1">&times;</button>';
 
-    var btnEl = bar.querySelector('#__aie_mode_el');
-    var btnAr = bar.querySelector('#__aie_mode_ar');
+    var btnEl   = bar.querySelector('#__aie_mode_el');
+    var btnAr   = bar.querySelector('#__aie_mode_ar');
+    var btnTerm = bar.querySelector('#__aie_tb_term');
 
     function updateModes() {
       btnEl.style.cssText = btnStyle(selectionMode === 'element');
@@ -196,6 +201,16 @@
 
     btnEl.addEventListener('click', function () { selectionMode = 'element'; updateModes(); });
     btnAr.addEventListener('click', function () { selectionMode = 'area';    updateModes(); });
+    btnTerm.addEventListener('click', function () {
+      if (terminalEl) {
+        terminalEl.remove(); terminalEl = null;
+        btnTerm.style.cssText = btnStyle(false);
+      } else {
+        terminalEl = createTerminalPanel();
+        document.body.appendChild(terminalEl);
+        btnTerm.style.cssText = btnStyle(true);
+      }
+    });
     bar.querySelector('#__aie_tb_close').addEventListener('click', exitEditMode);
 
     makeDraggable(bar);
@@ -266,6 +281,71 @@
     panel.querySelector('#__aie_hist_undo').addEventListener('click', function () {
       if (backupHTML) { doUndo(); }
     });
+  }
+
+  // ── Terminal panel ───────────────────────────────────────────────────────
+  function createTerminalPanel() {
+    var panel = document.createElement('div');
+    panel.style.cssText = [
+      'position:fixed', 'bottom:24px', 'left:340px',
+      'z-index:2147483647', 'width:420px', 'max-height:60vh',
+      'background:#0f172a', 'border-radius:12px',
+      'box-shadow:0 8px 32px rgba(0,0,0,0.4)',
+      'display:flex', 'flex-direction:column',
+      'font-family:ui-monospace,SFMono-Regular,monospace',
+      'overflow:hidden', 'box-sizing:border-box'
+    ].join(';');
+
+    panel.innerHTML =
+      '<div style="padding:10px 12px;background:#1e293b;border-bottom:1px solid #334155;' +
+        'display:flex;align-items:center;gap:6px;cursor:move">' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block"></span>' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block"></span>' +
+        '<span style="width:10px;height:10px;border-radius:50%;background:#22c55e;display:inline-block"></span>' +
+        '<span style="font-size:12px;font-weight:500;color:#94a3b8;flex:1;margin-left:4px">Claude I/O</span>' +
+        '<button id="__aie_term_close" style="background:none;border:none;cursor:pointer;' +
+          'color:#64748b;font-size:18px;padding:0 2px;line-height:1">&times;</button>' +
+      '</div>' +
+      '<div id="__aie_term_body" style="flex:1;overflow-y:auto;padding:12px;' +
+        'font-size:12px;color:#94a3b8;min-height:80px;max-height:calc(60vh - 46px)">' +
+        '<span style="color:#475569">En espera de una edici\xF3n…</span>' +
+      '</div>';
+
+    makeDraggable(panel);
+
+    panel.querySelector('#__aie_term_close').addEventListener('click', function () {
+      panel.remove(); terminalEl = null;
+      var tbBtn = toolbarEl && toolbarEl.querySelector('#__aie_tb_term');
+      if (tbBtn) {
+        tbBtn.style.background = '#374151'; tbBtn.style.color = '#d1d5db';
+      }
+    });
+
+    return panel;
+  }
+
+  function renderTerminal(state, instruction, output) {
+    if (!terminalEl) return;
+    var body = terminalEl.querySelector('#__aie_term_body');
+    if (!body) return;
+    if (state === 'working') {
+      body.innerHTML =
+        '<div style="margin-bottom:8px">' +
+          '<span style="color:#3b82f6">$ </span>' +
+          '<span style="color:#e2e8f0">' + escapeHtml(instruction) + '</span>' +
+        '</div>' +
+        '<div style="color:#f59e0b">▶ enviando a Claude…</div>';
+    } else {
+      body.innerHTML =
+        '<div style="margin-bottom:8px">' +
+          '<span style="color:#3b82f6">$ </span>' +
+          '<span style="color:#e2e8f0">' + escapeHtml(instruction) + '</span>' +
+        '</div>' +
+        '<pre style="margin:0;white-space:pre-wrap;word-break:break-all;color:#94a3b8;' +
+          'border-top:1px solid #1e293b;padding-top:8px;font-family:inherit;font-size:12px">' +
+          escapeHtml(output || '(sin salida)') + '</pre>';
+    }
+    body.scrollTop = body.scrollHeight;
   }
 
   function createHistoryPanel() {
@@ -468,10 +548,12 @@
           'font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
         btn.addEventListener('click', function () {
           hideMsg(); applyBtn.disabled = true; applyBtn.textContent = 'Editando archivo fuente…';
+          renderTerminal('working', evidence.instruction, null);
           var ev2 = Object.assign({}, evidence, { confirmFile: c });
           fetch(SOURCE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ev2) })
           .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
           .then(function (res) {
+            renderTerminal('done', evidence.instruction, res.body.claudeOutput || null);
             if (!res.ok) { throw new Error(res.body.error || 'Error'); }
             if (res.body.status === 'edited') {
               if (res.body.newHtml) {
@@ -492,7 +574,10 @@
               }
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
-          .catch(function (err) { showMsg(err.message || 'Error.', '#ef4444'); resetApplyBtn(); });
+          .catch(function (err) {
+            renderTerminal('done', evidence.instruction, 'Error: ' + (err.message || 'desconocido'));
+            showMsg(err.message || 'Error.', '#ef4444'); resetApplyBtn();
+          });
         });
         msgEl.appendChild(btn);
       });
@@ -503,13 +588,15 @@
       if (!instruction) { inputEl.focus(); return; }
       applyBtn.disabled = true; applyBtn.textContent = 'Editando archivo fuente…';
       inputEl.readOnly = true; hideMsg();
+      renderTerminal('working', instruction, null);
       var evidence = buildEvidence(selectedEl, instruction);
       fetch(SOURCE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(evidence) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
-        if (res.status === 422 && res.body.fallbackToDom) { inputEl.readOnly = false; return domFallback(evidence); }
+        if (res.status === 422 && res.body.fallbackToDom) { inputEl.readOnly = false; renderTerminal('done', instruction, null); return domFallback(evidence); }
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
         var rep = res.body;
+        renderTerminal('done', instruction, rep.claudeOutput || null);
         if (rep.status === 'edited') {
           if (rep.newHtml) {
             applyHtmlToDom(rep.newHtml);  // establece backupHTML antes de renderHistory
@@ -544,6 +631,7 @@
         }
       })
       .catch(function (err) {
+        renderTerminal('done', instruction, 'Error: ' + (err.message || 'desconocido'));
         showMsg('Error: ' + (err.message || 'desconocido') + '. Revisa con git.', '#ef4444');
         inputEl.readOnly = false; resetApplyBtn();
       });
@@ -583,9 +671,10 @@
   function exitEditMode() {
     editMode = false;
     document.body.style.cursor = '';
-    if (badgeEl)   { badgeEl.remove();   badgeEl   = null; }
-    if (toolbarEl) { toolbarEl.remove(); toolbarEl = null; }
-    if (historyEl) { historyEl.remove(); historyEl = null; }
+    if (badgeEl)    { badgeEl.remove();    badgeEl    = null; }
+    if (toolbarEl)  { toolbarEl.remove();  toolbarEl  = null; }
+    if (historyEl)  { historyEl.remove();  historyEl  = null; }
+    if (terminalEl) { terminalEl.remove(); terminalEl = null; }
     if (hoveredEl)            { hoveredEl.style.outline = '';         hoveredEl            = null; }
     if (areaOverlay)          { areaOverlay.remove();                 areaOverlay          = null; }
     if (selectionIndicatorEl) { selectionIndicatorEl.remove();        selectionIndicatorEl = null; }

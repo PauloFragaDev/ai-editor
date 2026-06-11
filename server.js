@@ -4,11 +4,12 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const crypto = require('crypto');
 const { resolveProject } = require('./lib/resolve-project');
 const { buildSourceEditPrompt } = require('./lib/build-prompt');
 const { parseReport } = require('./lib/parse-report');
 const { parseBackup } = require('./lib/parse-backup');
+const { runClaude } = require('./lib/run-claude');
 const backupStore    = require('./lib/backup-store');
 
 function projectKeyFromUrl(url, config) {
@@ -51,16 +52,25 @@ function loadConfig() {
 }
 
 function createApp(deps) {
-  var spawn  = (deps && deps.spawnSync) || spawnSync;
-  var config = (deps && deps.config)    || loadConfig();
+  var config = (deps && deps.config)      || loadConfig();
   var store  = (deps && deps.backupStore) || backupStore;
+
+  // Wrapper invisible: si deps.spawnSync existe (tests síncronos), lo envuelve en Promise.resolve.
+  // De lo contrario usa runClaude (async real sobre spawn).
+  var run = (deps && deps.runClaude) ||
+    ((deps && deps.spawnSync)
+      ? function (args, opts) { return Promise.resolve(deps.spawnSync('claude', args, opts)); }
+      : function (args, opts) { return runClaude(args, Object.assign({ command: 'claude' }, opts)); });
 
   var app = express();
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
 
+  // ── GET /health ──────────────────────────────────────────────────────────
+  app.get('/health', function (req, res) { res.json({ ok: true }); });
+
   // ── POST /edit  (modo DOM-efímero, fallback) ─────────────────────────────
-  app.post('/edit', function (req, res) {
+  app.post('/edit', async function (req, res) {
     var body = req.body || {};
     var html = body.html;
     var instruction = body.instruction;
@@ -72,11 +82,7 @@ function createApp(deps) {
     var prompt = PROMPT_PREFIX + 'HTML:\n' + html + '\n\nInstruction: ' + instruction;
 
     try {
-      var proc = spawn('claude', ['-p', prompt], {
-        encoding: 'utf-8',
-        timeout: 30000,
-        maxBuffer: 10 * 1024 * 1024
-      });
+      var proc = await run(['-p', prompt], { timeout: 30000 });
 
       if (proc.error) {
         throw proc.error;
@@ -96,7 +102,7 @@ function createApp(deps) {
   });
 
   // ── POST /edit-source  (edita el archivo fuente real) ────────────────────
-  app.post('/edit-source', function (req, res) {
+  app.post('/edit-source', async function (req, res) {
     var b = req.body || {};
 
     if (!b.instruction || (!b.outerHTML && !b.uniqueText)) {
@@ -142,18 +148,13 @@ function createApp(deps) {
     });
 
     try {
-      var proc = spawn('claude', [
+      var proc = await run([
         '-p', prompt,
         '--add-dir', resolved.projectRoot,
         '--allowedTools', 'Read,Grep,Glob,Edit',
         '--permission-mode', 'acceptEdits',
         '--model', 'sonnet'
-      ], {
-        cwd:       resolved.projectRoot,
-        encoding:  'utf-8',
-        timeout:   180000,
-        maxBuffer: 10 * 1024 * 1024
-      });
+      ], { cwd: resolved.projectRoot, timeout: 180000 });
 
       if (proc.error) {
         throw proc.error;
@@ -176,7 +177,7 @@ function createApp(deps) {
         } else {
           backupContent = parseBackup(proc.stdout);
         }
-        backupId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+        backupId = crypto.randomUUID();
         store.add(backupId, report.file, backupContent, {
           projectKey:  projectKeyFromUrl(b.url, config),
           instruction: (b.instruction || '').slice(0, 100),
@@ -255,8 +256,9 @@ function createApp(deps) {
 
 if (require.main === module) {
   var app = createApp();
-  app.listen(3333, function () {
-    console.log('[AI Editor] Server running on http://localhost:3333');
+  var port = process.env.PORT || 3333;
+  app.listen(port, function () {
+    console.log('[AI Editor] Server running on http://localhost:' + port);
   });
 }
 

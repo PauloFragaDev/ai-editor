@@ -33,6 +33,9 @@
   var areaStartY            = 0;
   var areaOverlay           = null;  // overlay temporal mientras se arrastra
   var selectionIndicatorEl  = null;  // indicador fijo tras soltar el ratón
+  var progressTimer         = null;  // setInterval while Claude is running
+  var dragCleanups          = [];    // document-level listeners added by makeDraggable
+  var terminalElapsed       = null;  // elapsed time string shown in done state
 
   var SERVER_URL  = 'http://localhost:3333/edit';
   var SOURCE_URL  = 'http://localhost:3333/edit-source';
@@ -76,7 +79,7 @@
       oy = e.clientY - el.getBoundingClientRect().top;
       e.preventDefault();
     });
-    document.addEventListener('mousemove', function (e) {
+    var onMove = function (e) {
       if (!dragging) return;
       var x = Math.max(0, Math.min(window.innerWidth  - el.offsetWidth,  e.clientX - ox));
       var y = Math.max(0, Math.min(window.innerHeight - el.offsetHeight, e.clientY - oy));
@@ -84,8 +87,14 @@
       el.style.top    = y + 'px';
       el.style.right  = 'auto';
       el.style.bottom = 'auto';
+    };
+    var onUp = function () { dragging = false; };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    dragCleanups.push(function () {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
     });
-    document.addEventListener('mouseup', function () { dragging = false; });
   }
 
   // ── Evidence collection ──────────────────────────────────────────────────
@@ -189,14 +198,11 @@
       '<button id="__aie_mode_el" style="' + btnStyle(false) + '">⬚ Elemento</button>' +
       '<button id="__aie_mode_ar" style="' + btnStyle(false) + '">▦ \xC1rea</button>' +
       '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
-      '<button id="__aie_tb_term" style="' + btnStyle(true)  + '">⌨ Terminal</button>' +
-      '<div style="width:1px;background:#4b5563;margin:0 4px;align-self:stretch"></div>' +
       '<button id="__aie_tb_close" style="background:none;border:none;color:#9ca3af;' +
         'font-size:18px;cursor:pointer;padding:0 4px;line-height:1">&times;</button>';
 
-    var btnEl   = bar.querySelector('#__aie_mode_el');
-    var btnAr   = bar.querySelector('#__aie_mode_ar');
-    var btnTerm = bar.querySelector('#__aie_tb_term');
+    var btnEl = bar.querySelector('#__aie_mode_el');
+    var btnAr = bar.querySelector('#__aie_mode_ar');
 
     function updateModes() {
       btnEl.style.cssText = btnStyle(selectionMode === 'element');
@@ -211,16 +217,6 @@
     btnAr.addEventListener('click', function () {
       selectionMode = (selectionMode === 'area') ? null : 'area';
       updateModes();
-    });
-    btnTerm.addEventListener('click', function () {
-      if (terminalEl) {
-        terminalEl.remove(); terminalEl = null;
-        btnTerm.style.cssText = btnStyle(false);
-      } else {
-        terminalEl = createTerminalPanel();
-        document.body.appendChild(terminalEl);
-        btnTerm.style.cssText = btnStyle(true);
-      }
     });
     bar.querySelector('#__aie_tb_close').addEventListener('click', exitEditMode);
 
@@ -320,16 +316,17 @@
             '<span style="color:#3b82f6">$ </span>' +
             '<span style="color:' + promptClr + '">' + escapeHtml(terminalInstr || '') + '</span>' +
           '</div>' +
-          '<div style="color:#f59e0b">▶ enviando a Claude…</div>';
+          '<div style="color:#f59e0b">▶ ' + escapeHtml(terminalOutput || 'Enviando a Claude…') + '</div>';
       } else {
         content =
           '<div style="margin-bottom:8px">' +
             '<span style="color:#3b82f6">$ </span>' +
             '<span style="color:' + promptClr + '">' + escapeHtml(terminalInstr || '') + '</span>' +
           '</div>' +
-          '<pre style="margin:0;white-space:pre-wrap;word-break:break-all;color:' + textClr + ';' +
-            'border-top:1px solid ' + hBorder + ';padding-top:8px;font-family:inherit;font-size:12px">' +
-            escapeHtml(terminalOutput || '(sin salida)') + '</pre>';
+          '<div style="color:#22c55e;margin-top:4px">✓ ' + escapeHtml(terminalOutput || 'Cambio aplicado') + '</div>' +
+          (terminalElapsed
+            ? '<div style="color:' + dimClr + ';font-size:11px;margin-top:6px">⏱ ' + escapeHtml(terminalElapsed) + '</div>'
+            : '');
       }
       bodyHtml =
         '<div id="__aie_term_body" style="overflow-y:auto;padding:12px;' +
@@ -365,8 +362,6 @@
     });
     panel.querySelector('#__aie_term_close').addEventListener('click', function () {
       panel.remove(); terminalEl = null;
-      var tbBtn = toolbarEl && toolbarEl.querySelector('#__aie_tb_term');
-      if (tbBtn) { tbBtn.style.background = '#374151'; tbBtn.style.color = '#d1d5db'; }
     });
     var body = panel.querySelector('#__aie_term_body');
     if (body) { body.scrollTop = body.scrollHeight; }
@@ -385,10 +380,11 @@
     return panel;
   }
 
-  function renderTerminal(state, instruction, output) {
-    terminalState  = state;
-    terminalInstr  = instruction;
-    terminalOutput = output;
+  function renderTerminal(state, instruction, output, elapsed) {
+    terminalState   = state;
+    terminalInstr   = instruction;
+    terminalOutput  = output;
+    terminalElapsed = elapsed || null;
     if (terminalEl) { renderTerminalPanel(terminalEl); }
   }
 
@@ -483,14 +479,18 @@
           'font-size:20px;color:#6b7280;line-height:1;padding:0">&times;</button>' +
       '</div>' +
       '<div style="overflow-y:auto;padding:12px 16px;flex:1">' +
-        '<details style="margin-bottom:10px">' +
-          '<summary style="cursor:pointer;font-size:12px;color:#6b7280;' +
-            'user-select:none;list-style:none">&#9654; HTML actual</summary>' +
-          '<pre style="font-size:11px;background:#f9fafb;border:1px solid #e5e7eb;' +
-            'border-radius:6px;padding:8px;overflow-x:auto;white-space:pre-wrap;' +
-            'word-break:break-all;margin:6px 0 0;max-height:160px;overflow-y:auto">' +
-            escapeHtml(html) + '</pre>' +
-        '</details>' +
+        (html !== null
+          ? '<details style="margin-bottom:10px">' +
+              '<summary style="cursor:pointer;font-size:12px;color:#6b7280;' +
+                'user-select:none;list-style:none">&#9654; HTML actual</summary>' +
+              '<pre id="__aie_html_pre" style="font-size:11px;background:#f9fafb;border:1px solid #e5e7eb;' +
+                'border-radius:6px;padding:8px;overflow-x:auto;white-space:pre-wrap;' +
+                'word-break:break-all;margin:6px 0 0;max-height:160px;overflow-y:auto">' +
+                escapeHtml(html) + '</pre>' +
+            '</details>'
+          : '<p style="font-size:13px;color:#9ca3af;text-align:center;margin:12px 0 10px">' +
+            '← Selecciona un elemento para editarlo</p>'
+        ) +
         '<textarea id="__aie_instruction" placeholder="\xBFQu\xe9 cambio necesitas?" ' +
           'style="width:100%;box-sizing:border-box;height:80px;padding:8px;' +
           'border:1px solid #d1d5db;border-radius:6px;font-size:13px;' +
@@ -505,8 +505,9 @@
           'border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap">' +
           'Deshacer</button>' +
         '<button id="__aie_apply" style="flex:1;padding:7px 14px;' +
-          'background:#3b82f6;color:#fff;border:none;border-radius:6px;' +
-          'font-size:13px;font-weight:500;cursor:pointer">' +
+          'background:' + (html !== null ? '#3b82f6' : '#9ca3af') + ';color:#fff;border:none;border-radius:6px;' +
+          'font-size:13px;font-weight:500;cursor:' + (html !== null ? 'pointer' : 'default') + '"' +
+          (html !== null ? '' : ' disabled') + '>' +
           'Aplicar</button>' +
       '</div>';
 
@@ -517,17 +518,20 @@
   function openPanel(el) {
     closePanel();
     selectedEl = el;
-    panelEl = createPanel(el.outerHTML);
+    panelEl = createPanel(el !== null ? el.outerHTML : null);
     document.body.appendChild(panelEl);
     makeDraggable(panelEl);
 
     var closeBtn = panelEl.querySelector('#__aie_close');
+    closeBtn.addEventListener('click', closePanel);
+
+    if (el === null) { return; }
+
     var applyBtn = panelEl.querySelector('#__aie_apply');
     var undoBtn  = panelEl.querySelector('#__aie_undo');
     var inputEl  = panelEl.querySelector('#__aie_instruction');
     var msgEl    = panelEl.querySelector('#__aie_msg');
 
-    closeBtn.addEventListener('click', closePanel);
     setTimeout(function () { inputEl.focus(); }, 40);
 
     function showMsg(text, color) {
@@ -536,29 +540,18 @@
     function hideMsg() { msgEl.style.display = 'none'; }
     function resetApplyBtn() { applyBtn.disabled = false; applyBtn.textContent = 'Aplicar'; inputEl.readOnly = false; }
 
-    function repositionIndicator() {
-      if (!selectionIndicatorEl || !selectedEl) { return; }
-      var r = selectedEl.getBoundingClientRect();
-      selectionIndicatorEl.style.left   = r.left + 'px';
-      selectionIndicatorEl.style.top    = r.top + 'px';
-      selectionIndicatorEl.style.width  = r.width + 'px';
-      selectionIndicatorEl.style.height = r.height + 'px';
-    }
-
     function applyHtmlToDom(newHtml) {
+      if (!selectedEl) { resetApplyBtn(); return; }
       var tmp = document.createElement('div');
       tmp.innerHTML = newHtml;
-      var newEl = tmp.firstElementChild || tmp.firstChild;
+      var newEl = tmp.firstElementChild;
       if (!newEl) { showMsg('La IA devolvió una respuesta vacía.', '#ef4444'); resetApplyBtn(); return; }
       backupHTML = selectedEl.outerHTML;
       if (hoveredEl === selectedEl) { hoveredEl = null; }
-      if (tmp.children.length > 1) {
-        selectedEl.replaceWith.apply(selectedEl, Array.prototype.slice.call(tmp.childNodes));
-        selectedEl = tmp.childNodes[0] || newEl;
-      } else {
-        selectedEl.replaceWith(newEl);
-        selectedEl = newEl;
-      }
+      selectedEl.replaceWith(newEl);
+      selectedEl = newEl;
+      var pre = panelEl && panelEl.querySelector('#__aie_html_pre');
+      if (pre) { pre.textContent = selectedEl.outerHTML; }
       undoBtn.style.display = '';
       if (historyEl) { renderHistory(historyEl); }
       inputEl.value = ''; resetApplyBtn(); inputEl.focus();
@@ -594,15 +587,20 @@
           hideMsg(); applyBtn.disabled = true; applyBtn.textContent = 'Editando archivo fuente…';
           renderTerminal('working', evidence.instruction, null);
           var ev2 = Object.assign({}, evidence, { confirmFile: c });
+          var t0c = Date.now();
           fetch(SOURCE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ev2) })
           .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
           .then(function (res) {
-            renderTerminal('done', evidence.instruction, res.body.claudeOutput || null);
-            if (!res.ok) { throw new Error(res.body.error || 'Error'); }
+            var elapsedC = ((Date.now() - t0c) / 1000).toFixed(1) + 's';
+            if (!res.ok) {
+              renderTerminal('done', evidence.instruction, 'Error: ' + (res.body.error || res.status), elapsedC);
+              throw new Error(res.body.error || 'Error');
+            }
+            renderTerminal('done', evidence.instruction, res.body.summary || null, elapsedC);
             if (res.body.status === 'edited') {
               if (res.body.newHtml) {
                 applyHtmlToDom(res.body.newHtml);
-                repositionIndicator();
+                if (selectionIndicatorEl) { selectionIndicatorEl.remove(); selectionIndicatorEl = null; }
                 addHistoryEntry(selectedEl, evidence.instruction, res.body.file, res.body.backupId, res.body.hasBackup);
                 if (res.body.affectsMultiple) {
                   showMsg('Guardado · plantilla compartida (afecta otras p\xE1ginas)', '#92400e');
@@ -619,7 +617,8 @@
             } else { showMsg('No se pudo editar.', '#ef4444'); resetApplyBtn(); }
           })
           .catch(function (err) {
-            renderTerminal('done', evidence.instruction, 'Error: ' + (err.message || 'desconocido'));
+            var elapsedC = ((Date.now() - t0c) / 1000).toFixed(1) + 's';
+            renderTerminal('done', evidence.instruction, 'Error: ' + (err.message || 'desconocido'), elapsedC);
             showMsg(err.message || 'Error.', '#ef4444'); resetApplyBtn();
           });
         });
@@ -632,19 +631,37 @@
       if (!instruction) { inputEl.focus(); return; }
       applyBtn.disabled = true; applyBtn.textContent = 'Editando archivo fuente…';
       inputEl.readOnly = true; hideMsg();
-      renderTerminal('working', instruction, null);
+      var progressSteps = [
+        'Localizando archivo fuente…',
+        'Claude leyendo el archivo…',
+        'Claude aplicando el cambio…',
+        'Esperando respuesta…'
+      ];
+      var progressIdx = 0;
+      renderTerminal('working', instruction, progressSteps[0]);
+      progressTimer = setInterval(function () {
+        progressIdx = Math.min(progressIdx + 1, progressSteps.length - 1);
+        terminalState  = 'working';
+        terminalOutput = progressSteps[progressIdx];
+        if (terminalEl) { renderTerminalPanel(terminalEl); }
+      }, 5000);
       var evidence = buildEvidence(selectedEl, instruction);
+      var t0 = Date.now();
       fetch(SOURCE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(evidence) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
-        if (res.status === 422 && res.body.fallbackToDom) { inputEl.readOnly = false; renderTerminal('done', instruction, null); return domFallback(evidence); }
+        clearInterval(progressTimer); progressTimer = null;
+        if (!selectedEl) { resetApplyBtn(); return; }
+        var secs = ((Date.now() - t0) / 1000).toFixed(1);
+        var elapsed = secs + 's';
+        if (res.status === 422 && res.body.fallbackToDom) { inputEl.readOnly = false; renderTerminal('done', instruction, null, elapsed); return domFallback(evidence); }
         if (!res.ok) { throw new Error(res.body.error || 'Error ' + res.status); }
         var rep = res.body;
-        renderTerminal('done', instruction, rep.claudeOutput || null);
+        renderTerminal('done', instruction, rep.summary || null, elapsed);
         if (rep.status === 'edited') {
           if (rep.newHtml) {
-            applyHtmlToDom(rep.newHtml);  // establece backupHTML antes de renderHistory
-            repositionIndicator();
+            applyHtmlToDom(rep.newHtml);
+            if (selectionIndicatorEl) { selectionIndicatorEl.remove(); selectionIndicatorEl = null; }
             addHistoryEntry(selectedEl, instruction, rep.file, rep.backupId, rep.hasBackup);
             if (rep.affectsMultiple) {
               showMsg('Guardado · plantilla compartida (afecta otras p\xE1ginas)', '#92400e');
@@ -675,7 +692,10 @@
         }
       })
       .catch(function (err) {
-        renderTerminal('done', instruction, 'Error: ' + (err.message || 'desconocido'));
+        clearInterval(progressTimer); progressTimer = null;
+        if (selectionIndicatorEl) { selectionIndicatorEl.remove(); selectionIndicatorEl = null; }
+        var elapsed = ((Date.now() - t0) / 1000).toFixed(1) + 's';
+        renderTerminal('done', instruction, 'Error: ' + (err.message || 'desconocido'), elapsed);
         showMsg('Error: ' + (err.message || 'desconocido') + '. Revisa con git.', '#ef4444');
         inputEl.readOnly = false; resetApplyBtn();
       });
@@ -700,6 +720,8 @@
     terminalState    = 'idle';
     terminalInstr    = null;
     terminalOutput   = null;
+    terminalElapsed  = null;
+    dragCleanups     = [];
     badgeEl   = createBadge();   document.body.appendChild(badgeEl);
     toolbarEl = createToolbar(); document.body.appendChild(toolbarEl);
     historyEl = createHistoryPanel(); document.body.appendChild(historyEl);
@@ -707,6 +729,7 @@
     document.body.appendChild(terminalEl);
     renderTerminalPanel(terminalEl);
     makeDraggable(terminalEl);
+    openPanel(null);
     // Carga el historial del proyecto desde el servidor
     fetch(HISTORY_URL + historyQS())
       .then(function (r) { return r.json(); })
@@ -720,6 +743,9 @@
   function exitEditMode() {
     editMode = false;
     document.body.style.cursor = '';
+    if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+    dragCleanups.forEach(function (fn) { fn(); });
+    dragCleanups = [];
     if (badgeEl)    { badgeEl.remove();    badgeEl    = null; }
     if (toolbarEl)  { toolbarEl.remove();  toolbarEl  = null; }
     if (historyEl)  { historyEl.remove();  historyEl  = null; }
@@ -791,8 +817,6 @@
     if (x2 - x1 < 5 || y2 - y1 < 5) return;
     var target = findContainingElement(x1, y1, x2, y2);
     if (target) {
-      // openPanel llama a closePanel internamente, que borraría el indicador
-      // si lo creamos antes. Lo creamos DESPUÉS de que openPanel termine.
       openPanel(target);
       selectionIndicatorEl = document.createElement('div');
       selectionIndicatorEl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;' +

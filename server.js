@@ -185,7 +185,7 @@ function createApp(deps) {
         });
       }
       res.json(Object.assign({}, report, {
-        backupId: backupId,
+        backupId:  backupId,
         hasBackup: (backupContent !== null && backupContent !== undefined)
       }));
     } catch (err) {
